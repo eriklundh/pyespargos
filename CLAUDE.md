@@ -117,21 +117,32 @@ PR description should include:
 
 ## Headless smoke test (no display needed)
 
-Xvfb is not installed on the Pi. Use Qt's built-in offscreen platform instead:
+Uses Xvfb (install: `sudo apt-get install xvfb`). Both backends tested:
 
 ```bash
+# Start virtual display
+Xvfb :99 -screen 0 1920x1080x24 &
+XVFB_PID=$!
+sleep 1
+
 cd demos/camera
 source /home/eriklundh/pyespargos/.venv/bin/activate
-env QT_QPA_PLATFORM=offscreen python camera.py --camera-backend qt -s 192.168.1.2
+
+# Qt backend
+timeout 10 env DISPLAY=:99 QT_QPA_PLATFORM=xcb \
+    python camera.py --camera-backend qt -s 192.168.1.2
+
+# Picamera2 backend
+timeout 10 env DISPLAY=:99 QT_QPA_PLATFORM=xcb \
+    python camera.py --camera-backend picamera2 -s 192.168.1.2
+
+kill $XVFB_PID
 ```
 
-Expected output (truncated, then killed by Ctrl+C or timeout):
+Expected output for both (app runs until timeout kills it — exit code 0 = pass):
 - Pool connects and identifies ESPARGOS board
-- `WARNING:root:VideoCamera: no formats available for device ''` — normal when no USB camera attached
-- Calibration completes (~197 clusters)
+- Qt path: `WARNING:root:VideoCamera: no formats available for device ''` — normal when no USB camera attached
+- Picamera2 path: libcamera enumerates IMX477 sensor modes, `setFocusMode() is a no-op` warning fires
+- Calibration completes (~196–197 clusters)
 - `INFO:pyespargos.backlog:Started CSI backlog thread`
-- App runs indefinitely (no crash = pass)
-
-The `--camera-backend picamera2` path cannot be smoke-tested headlessly because
-`Component.onCompleted` in QML (which calls `WebCam.setVideoSink()`) requires a
-real display to render VideoOutput.
+- App runs indefinitely (killed by timeout, not by a crash)
