@@ -15,7 +15,12 @@ Rectangle {
 	VideoOutput {
 		id: videoOutput
 		anchors.fill: parent
-		videoSink: backend.isPicamera2 ? WebCam.picamera2VideoSink : null
+
+		Component.onCompleted: {
+			if (backend.isPicamera2) {
+				WebCam.setVideoSink(videoOutput.videoSink)
+			}
+		}
 	}
 
 	ShaderEffect {

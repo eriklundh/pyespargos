@@ -1,6 +1,6 @@
 import logging
 import PyQt6.QtCore
-from PyQt6.QtMultimedia import QMediaDevices, QCameraDevice, QCameraFormat, QCamera, QVideoSink, QVideoFrame, QVideoFrameFormat
+from PyQt6.QtMultimedia import QMediaDevices, QCameraDevice, QCameraFormat, QCamera, QVideoSink, QVideoFrame
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QImage
 
@@ -144,7 +144,7 @@ class Picamera2VideoCamera(QCamera):
         # No device passed — parent is a QObject carrier only, not a real camera session.
         super().__init__()
 
-        self._sink = QVideoSink(parent=self)
+        self._output_sink = None  # set by QML via setVideoSink() once VideoOutput is ready
         self._picam = None
         self._current_device_str = None
         self._current_format_str = None
@@ -290,12 +290,15 @@ class Picamera2VideoCamera(QCamera):
             result.append(f"{w}x{h} @ {fps:.2f} FPS")
         return result
 
-    @PyQt6.QtCore.pyqtProperty(QVideoSink, constant=True)
-    def picamera2VideoSink(self) -> QVideoSink:
-        return self._sink
+    @PyQt6.QtCore.pyqtSlot(QVideoSink)
+    def setVideoSink(self, sink: QVideoSink):
+        """Called by QML (Component.onCompleted) to hand us the VideoOutput's internal sink."""
+        self._output_sink = sink
 
     @PyQt6.QtCore.pyqtSlot()
     def _capture_frame(self):
+        if self._output_sink is None:
+            return
         try:
             array = self._picam.capture_array("main")
         except Exception as e:
@@ -305,7 +308,7 @@ class Picamera2VideoCamera(QCamera):
         h, w = array.shape[:2]
         image = QImage(array.data, w, h, w * 3, QImage.Format.Format_RGB888).copy()
         frame = QVideoFrame(image)
-        self._sink.setVideoFrame(frame)
+        self._output_sink.setVideoFrame(frame)
 
 
 class DummyVideoCamera(QCamera):
