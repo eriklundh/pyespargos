@@ -329,3 +329,23 @@ class DummyVideoCamera(QCamera):
     @PyQt6.QtCore.pyqtProperty(list, constant=True)
     def availableFormats(self) -> list[str]:
         return ["No format available"]
+
+
+def make_video_camera(backend: str, device: str | None, fmt: str | None) -> QCamera:
+    """Factory for VideoCamera / Picamera2VideoCamera.
+
+    backend: "qt" | "picamera2" | "auto"
+      - "auto" calls _detect_backend() to pick based on hardware.
+    Raises RuntimeError if the requested backend is unavailable.
+    """
+    if backend == "auto":
+        backend = _detect_backend()
+
+    if backend == "picamera2":
+        if not PICAMERA2_AVAILABLE:
+            logging.warning("picamera2 not available, falling back to Qt backend")
+            backend = "qt"
+        else:
+            return Picamera2VideoCamera(device, fmt)
+
+    return VideoCamera(device, fmt)
