@@ -173,12 +173,12 @@ class Picamera2VideoCamera(QCamera):
         self._current_device_str = f"{selected['Num']}: {selected['Model']}"
         self._picam = Picamera2(selected["Num"])
 
-        # Select format / sensor mode
-        self._apply_format(default_format)
-
-        # QTimer drives frame capture in the Qt event loop
+        # QTimer drives frame capture in the Qt event loop — must exist before _apply_format()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._capture_frame)
+
+        # Select format / sensor mode (sets timer interval)
+        self._apply_format(default_format)
 
     def _apply_format(self, format_str: str | None):
         """Configure the Picamera2 instance for the given format string (or the last mode)."""
