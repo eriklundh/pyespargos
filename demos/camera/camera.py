@@ -134,7 +134,8 @@ class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin,
 
         # Camera setup (if enabled in config)
         if self.appconfig.get("camera", "enable"):
-            self.videocamera = videocamera.VideoCamera(
+            self.videocamera = videocamera.make_video_camera(
+                self.args.camera_backend,
                 self.appconfig.get("camera", "device"),
                 self.appconfig.get("camera", "format"),
             )
@@ -743,6 +744,14 @@ class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin,
     @PyQt6.QtCore.pyqtProperty(bool, constant=False, notify=cameraEnabledChanged)
     def cameraEnabled(self):
         return bool(self.appconfig.get("camera", "enable"))
+
+    @PyQt6.QtCore.pyqtProperty(bool, constant=True)
+    def isQtCamera(self):
+        return isinstance(self.videocamera, videocamera.VideoCamera)
+
+    @PyQt6.QtCore.pyqtProperty(bool, constant=True)
+    def isPicamera2(self):
+        return isinstance(self.videocamera, videocamera.Picamera2VideoCamera)
 
     @PyQt6.QtCore.pyqtProperty(float, constant=False, notify=azimuthCorrectionChanged)
     def azimuth_correction(self):
