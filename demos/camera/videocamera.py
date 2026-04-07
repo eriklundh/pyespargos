@@ -1,5 +1,50 @@
+import logging
 import PyQt6.QtCore
 from PyQt6.QtMultimedia import QMediaDevices, QCameraDevice, QCameraFormat, QCamera
+
+try:
+    from picamera2 import Picamera2
+    PICAMERA2_AVAILABLE = True
+except ImportError:
+    PICAMERA2_AVAILABLE = False
+
+
+def _detect_backend() -> str:
+    """Return 'picamera2' if running on a Raspberry Pi with picamera2 available, else 'qt'."""
+    try:
+        model = open("/proc/device-tree/model", "r").read()
+        if "Raspberry Pi" in model and PICAMERA2_AVAILABLE:
+            return "picamera2"
+    except OSError:
+        pass
+    return "qt"
+
+
+def list_all_cameras() -> list:
+    """Return a flat list of dicts describing all cameras from both backends.
+
+    Each dict has keys: index, backend, name, id.
+    """
+    cameras = []
+    idx = 0
+    for device in QMediaDevices.videoInputs():
+        cameras.append({
+            "index": idx,
+            "backend": "qt",
+            "name": device.description(),
+            "id": bytes(device.id()).decode("utf-8"),
+        })
+        idx += 1
+    if PICAMERA2_AVAILABLE:
+        for info in Picamera2.global_camera_info():
+            cameras.append({
+                "index": idx,
+                "backend": "picamera2",
+                "name": info.get("Model", "Unknown"),
+                "id": str(info.get("Num", "")),
+            })
+            idx += 1
+    return cameras
 
 
 class VideoCamera(QCamera):
