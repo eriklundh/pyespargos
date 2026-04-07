@@ -114,3 +114,24 @@ PR description should include:
   - Solution: Picamera2VideoCamera subclass + factory + QML branch
   - Hardware tested on: Pi5 + HQ Camera Module + Logitech C920
   - Backwards compatible: Qt path unchanged, picamera2 optional import
+
+## Headless smoke test (no display needed)
+
+Xvfb is not installed on the Pi. Use Qt's built-in offscreen platform instead:
+
+```bash
+cd demos/camera
+source /home/eriklundh/pyespargos/.venv/bin/activate
+env QT_QPA_PLATFORM=offscreen python camera.py --camera-backend qt -s 192.168.1.2
+```
+
+Expected output (truncated, then killed by Ctrl+C or timeout):
+- Pool connects and identifies ESPARGOS board
+- `WARNING:root:VideoCamera: no formats available for device ''` — normal when no USB camera attached
+- Calibration completes (~197 clusters)
+- `INFO:pyespargos.backlog:Started CSI backlog thread`
+- App runs indefinitely (no crash = pass)
+
+The `--camera-backend picamera2` path cannot be smoke-tested headlessly because
+`Component.onCompleted` in QML (which calls `WebCam.setVideoSink()`) requires a
+real display to render VideoOutput.
