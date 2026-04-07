@@ -48,6 +48,7 @@ class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin,
             "device": None,  # will be populated by app, can take values like "/dev/video0"
             "fov_azimuth": 72,
             "fov_elevation": 41,
+            "backend": "auto",
         },
         "beamformer": {
             "type": "FFT",
@@ -95,10 +96,29 @@ class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin,
             help="Do not actually use camera, only show spatial spectrum visualization",
             action="store_true",
         )
+        parser.add_argument(
+            "--camera-backend",
+            choices=["qt", "picamera2", "auto"],
+            default="auto",
+            help="Camera backend to use: qt (V4L2/USB), picamera2 (CSI/RPi), or auto (detect)",
+        )
+        parser.add_argument(
+            "--list-cameras",
+            default=False,
+            action="store_true",
+            help="List all available cameras from both backends and exit",
+        )
         super().__init__(
             argv,
             argparse_parent=parser,
         )
+
+        # List cameras and exit if requested (QApplication is up so QMediaDevices works)
+        if self.args.list_cameras:
+            cameras = videocamera.list_all_cameras()
+            for cam in cameras:
+                print(f"[{cam['index']}] backend={cam['backend']}  name={cam['name']}  id={cam['id']}")
+            sys.exit(0)
 
         # Load additional calibration data from file, if provided
         self.additional_calibration = None
