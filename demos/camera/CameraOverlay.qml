@@ -8,13 +8,14 @@ Rectangle {
 
 	CaptureSession {
 		id: captureSession
-		camera: backend.cameraEnabled ? WebCam : null
-		videoOutput: videoOutput
+		camera: backend.isQtCamera && backend.cameraEnabled ? WebCam : null
+		videoOutput: backend.isQtCamera ? videoOutput : null
 	}
 
 	VideoOutput {
 		id: videoOutput
-        anchors.fill: parent
+		anchors.fill: parent
+		videoSink: backend.isPicamera2 ? WebCam.picamera2VideoSink : null
 	}
 
 	ShaderEffect {
