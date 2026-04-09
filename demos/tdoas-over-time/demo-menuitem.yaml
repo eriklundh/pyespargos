@@ -1,0 +1,5 @@
+name: "TDOAs Over Time"
+description: "Show time difference of arrival estimates over time."
+command: "python tdoas-over-time.py {single_array}"
+requires:
+  - single_array

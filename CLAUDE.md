@@ -146,3 +146,46 @@ Expected output for both (app runs until timeout kills it — exit code 0 = pass
 - Calibration completes (~196–197 clusters)
 - `INFO:pyespargos.backlog:Started CSI backlog thread`
 - App runs indefinitely (killed by timeout, not by a crash)
+
+---
+
+## Qt GUI Development and Testing Conventions
+
+### Qt binding
+
+This project uses **PyQt6**, not PySide6. This matches pyespargos, which the menu app
+launches demos from. Never mix bindings in the same process.
+
+- Imports: `from PyQt6.QtWidgets import ...`, `from PyQt6.QtCore import ...`, etc.
+- Use `pyqtSignal` and `pyqtSlot` (not `Signal`/`Slot`).
+- Use fully-scoped enums: `Qt.AlignmentFlag.AlignCenter`, `Qt.Orientation.Horizontal`, etc.
+
+### Testing stack
+
+- Use **pytest + pytest-qt** for all GUI tests.
+- Set `PYTEST_QT_API=pyqt6` in `pytest.ini` (or `pyproject.toml`) so pytest-qt doesn't guess the binding.
+- Default test runs are **headless via `QT_QPA_PLATFORM=offscreen`**. This is the fast inner loop and should cover the majority of tests: widget logic, signal/slot wiring, state transitions, QProcess command construction for launching demos.
+- Use `qtbot.mouseClick()`, `qtbot.keyClick()`, `qtbot.waitSignal()`, and `QSignalSpy` for interactions and assertions.
+
+### Integration tests (separate, slower tier)
+
+- Place integration tests under `tests/integration/` and mark them with `@pytest.mark.integration` so they don't run by default.
+- Run them with: `xvfb-run -a pytest -m integration tests/integration/`
+- Force software rendering on the Pi 5 to avoid VideoCore quirks under Xvfb:
+  set `LIBGL_ALWAYS_SOFTWARE=1` and optionally `QT_QUICK_BACKEND=software`.
+- Integration tests may screenshot the app (via `QWidget.grab()` or `scrot`) and save
+  artifacts to `tests/integration/artifacts/` for inspection and golden-image diffing.
+
+### Mocking demo launches
+
+The menu app launches pyespargos demos via `QProcess`. In unit tests, **mock the launch
+and assert on the command/arguments** — do NOT actually start demo processes. Real demo
+launches require ESPARGOS hardware and should only happen in a small handful of
+explicitly-marked smoke tests, not in the default test run.
+
+### Development loop expectations
+
+- The fast headless test suite (`pytest` with offscreen QPA) is the primary loop. Keep it
+  fast and deterministic so it can be run frequently during iteration.
+- Do not add tests that depend on the real labwc/Wayland desktop session — those are
+  verified manually.

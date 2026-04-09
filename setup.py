@@ -17,5 +17,23 @@ setup(
     ],
     python_requires=">=3.11",
     install_requires=["websockets>=12.0", "numpy>=1.26.0"],
+    extras_require={
+        # Runtime dependencies for the demo applications
+        "demos": [
+            "PyQt6>=6.6",
+            "PyQt6-Charts>=6.6",
+            "PyYAML>=6.0",
+            "matplotlib>=3.7",
+        ],
+        # Additional dependencies for running tests
+        "dev": [
+            "PyQt6>=6.6",
+            "PyQt6-Charts>=6.6",
+            "PyYAML>=6.0",
+            "matplotlib>=3.7",
+            "pytest>=7.0",
+            "pytest-qt>=4.0",
+        ],
+    },
     include_package_data=True,
 )

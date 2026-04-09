@@ -1,0 +1,5 @@
+name: "Combined Array"
+description: "Beamspace spectrum using a combined multi-board ESPARGOS array."
+command: "python combined-array.py"
+requires:
+  - multi_array

@@ -112,3 +112,52 @@ You can also use :meth:`~espargos.backlog.CSIBacklog.get_multiple` to retrieve m
 Advanced Usage
 --------------
 Check out the source code of our `demo applications <https://github.com/ESPARGOS/pyespargos/tree/main/demos>`_ to learn how to use *pyespargos* in a real-time application.
+
+Demo Applications
+-----------------
+*pyespargos* ships with a collection of demo applications in the ``demos/`` folder.
+All demos are built on a shared framework (``demos/common``) that provides a consistent CLI, YAML configuration, and a graphical pool management panel.
+
+The easiest way to explore the demos is the **demos menu** — a touch-friendly launcher that lets you configure the ESPARGOS IP address and single-array mode in one place:
+
+.. code-block:: bash
+
+   python demos/menu.py
+
+Individual demos can also be run directly, for example:
+
+.. code-block:: bash
+
+   python demos/instantaneous-csi/instantaneous-csi.py 192.168.1.2
+
+Installation Extras
+-------------------
+*pyespargos* uses ``extras_require`` in ``setup.py`` to keep optional dependencies out of the base install.
+
+Install demo dependencies (PyQt6, PyQt6-Charts, PyYAML, matplotlib):
+
+.. code-block:: bash
+
+   pip install -e ".[demos]"
+
+Install development / contributor dependencies (demo deps + pytest, pytest-qt):
+
+.. code-block:: bash
+
+   pip install -e ".[dev]"
+   # or equivalently:
+   pip install -r requirements-dev.txt
+
+Running the Test Suite
+-----------------------
+Unit tests (fast, no display required):
+
+.. code-block:: bash
+
+   pytest
+
+Integration tests (require Xvfb or a real display):
+
+.. code-block:: bash
+
+   xvfb-run -a pytest -m integration demos/demos-menu/tests/integration/

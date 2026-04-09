@@ -74,6 +74,7 @@ The following demos are provided in the `demos` folder of this repository:
 | `combined-array-calibration` | Tool for calibrating combined multi-board antenna arrays. Visualizes and exports calibration data. |
 | `camera` | Overlay WiFi spatial spectrum on a live camera feed. Supports USB/V4L2 cameras (Qt backend) and Raspberry Pi CSI cameras (Picamera2 backend). Requires shaders to be compiled first (see `demos/camera/README.md`). |
 | `radiation-pattern-3d` | Interactive 3D radiation pattern visualization. Requires additional packages (see [`demos/radiation-pattern-3d/README.md`](demos/radiation-pattern-3d/README.md)). |
+| `demos-menu` | Touch-friendly launcher menu for all ESPARGOS demos. Run with `python demos/menu.py`. No ESPARGOS-specific arguments needed — configure the IP address from within the UI. |
 
 Most demos support both single ESPARGOS arrays and combined multi-board setups via command-line arguments or YAML configuration files.
 
@@ -149,7 +150,7 @@ pip install -e .
 If you want to run the demo applications:
 
 ```bash
-pip install pyqt6 pyqt6-charts pyyaml matplotlib
+pip install -e ".[demos]"
 ```
 
 If you want to run demos such as `camera` and `azimuth-delay`, you will also need Qt Shader Baker (`qsb`):
@@ -166,6 +167,18 @@ sudo pacman -S qt6-shadertools
 ```
 
 > **Note:** The `compile_shader.sh` scripts currently expect `qsb` at `/usr/lib/qt6/bin/qsb`. If your distribution installs it elsewhere, update the script accordingly.
+
+#### 6. For contributors / developers (optional)
+
+If you want to run tests or contribute to the codebase, install the dev dependencies:
+
+```bash
+pip install -e ".[dev]"
+# or equivalently:
+pip install -r requirements-dev.txt
+```
+
+This installs everything from `[demos]` plus `pytest` and `pytest-qt` for running the test suite.
 
 </details>
 
@@ -220,12 +233,18 @@ pip install -e .
 If you want to run the demo applications:
 
 ```cmd
-pip install pyqt6 pyqt6-charts pyyaml matplotlib
+pip install -e ".[demos]"
 ```
 
 If you want to run demos such as `camera` and `azimuth-delay`, you will also need Qt 6 so that `qsb.exe` (Qt Shader Baker) is available. The simplest option is to use the Qt Online Installer and install a desktop Qt 6 kit.
 
 > **Note:** The shader batch scripts currently default to `C:\Qt\6.10.2\mingw_64\bin\qsb.exe`. If your Qt installation is in a different location, either update the `QSB` path in the `.bat` scripts or add the Qt `bin` directory to `PATH`.
+
+#### 6. For contributors / developers (optional)
+
+```cmd
+pip install -e ".[dev]"
+```
 
 </details>
 
@@ -286,7 +305,7 @@ pip install -e .
 If you want to run the demo applications:
 
 ```bash
-pip install pyqt6 pyqt6-charts pyyaml matplotlib
+pip install -e ".[demos]"
 ```
 
 If you want to run demos such as `camera` and `azimuth-delay`, you will also need Qt Shader Baker (`qsb`). One option is:
@@ -303,6 +322,14 @@ qsb --version
 
 > **Note:** If `qsb` is not on your `PATH`, use the full path from your Qt installation when running `compile_shader.sh`.
 
+#### 6. For contributors / developers (optional)
+
+```bash
+pip install -e ".[dev]"
+# or equivalently:
+pip install -r requirements-dev.txt
+```
+
 </details>
 
 ---
@@ -311,6 +338,24 @@ qsb --version
 
 After installing *pyespargos* and the demo dependencies (steps above), you can run a demo.
 Make sure the virtual environment is activated, then run the following from the *pyespargos* directory.
+
+#### Using the demos menu (recommended)
+
+The easiest way to explore all demos is through the touch-friendly launcher menu:
+
+**Linux / macOS:**
+```bash
+python demos/menu.py
+```
+
+**Windows (Command Prompt):**
+```cmd
+python demos\menu.py
+```
+
+The menu lets you configure the ESPARGOS IP address and single-array mode in one place, then launch any demo with a single click.
+
+#### Running a demo directly
 
 For example, to run the **Instantaneous CSI** demo with an ESPARGOS controller at `192.168.1.2`:
 

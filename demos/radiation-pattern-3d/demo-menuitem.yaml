@@ -1,0 +1,5 @@
+name: "3D Radiation Pattern"
+description: "Visualise the 3D radiation pattern of the array."
+command: "python radiation-pattern-3d.py {single_array}"
+requires:
+  - multi_array

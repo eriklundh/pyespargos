@@ -1,2 +1,10 @@
 [tool.black]
 line-length = 250
+
+[tool.pytest.ini_options]
+qt_api = "pyqt6"
+qt_default_raising = true
+testpaths = ["demos/demos-menu/tests"]
+markers = [
+    "integration: marks tests as integration tests (run with xvfb-run -a pytest -m integration)",
+]

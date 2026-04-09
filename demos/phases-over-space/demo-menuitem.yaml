@@ -1,0 +1,5 @@
+name: "Phases Over Space"
+description: "Show CSI phase distribution across antennas."
+command: "python phases-over-space.py {single_array}"
+requires:
+  - single_array

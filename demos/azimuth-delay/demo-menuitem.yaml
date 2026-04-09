@@ -1,0 +1,5 @@
+name: "Azimuth-Delay"
+description: "Show 2D azimuth vs. delay spectrum of incoming signals."
+command: "python azimuth-delay.py {single_array}"
+requires:
+  - multi_array
