@@ -174,12 +174,30 @@ A standalone touch-friendly launcher app at `demos/demos-menu/` that scans all d
 
 ### `demo-menuitem.yaml` format (one file per demo folder)
 
+Normal demo:
 ```yaml
 name: "Camera Overlay"
 description: "Overlay received power on top of a live camera image"
 command: "python camera.py {single_array}"
 requires:
   - single_array
+```
+
+Hidden entry (demos-menu itself):
+```yaml
+hidden: true
+name: "Demos Menu"
+description: "The menu launcher itself — not shown in the menu"
+```
+
+**`hidden: true`** — scanner reads the file (no missing-file warning), but excludes it from the displayed menu. Used for `demos-menu/` and any other infrastructure folder that should never appear as a launchable demo.
+
+**Folders excluded from the scan entirely** (no warning expected):
+- `demos/common/` — shared library code, not a runnable demo. Hardcoded exclusion in `DemoScanner`.
+
+**Missing file behaviour**: any `demos/*/` folder that is not in the exclusion list and has no `demo-menuitem.yaml` triggers:
+```
+WARNING: demos/<folder>/ has no demo-menuitem.yaml — skipping
 ```
 
 **Placeholder tokens** (substituted via `str.format_map()` at launch time):
@@ -210,13 +228,23 @@ requires:
 
 ---
 
-### `demos/demos-menu/` file structure
+### File structure
 
 ```
-demos/demos-menu/
-    demos-menu.py          # QApplication launcher (not ESPARGOSApplication — no pool needed)
-    demos-menu.qml         # main window: settings panel + demo grid
-    DemoCard.qml           # individual demo card component
+pyespargos/
+    demos/
+        menu.py                      # thin entry point: sets up sys.path, imports and runs DemosMenuApp
+        demos-menu/
+            demos-menu.py            # QApplication subclass, DemoScanner, CommonSettings
+            demos-menu.qml           # main window
+            DemoCard.qml             # card component
+            demo-menuitem.yaml       # hidden: true — present so scanner doesn't warn, excluded from menu
+        camera/
+            demo-menuitem.yaml
+        speedtest/
+            demo-menuitem.yaml
+        ...                          # every other demos/* folder must have demo-menuitem.yaml
+        common/                      # no demo-menuitem.yaml — explicitly excluded from scan (not a runnable demo)
 ```
 
 ---
@@ -226,7 +254,7 @@ demos/demos-menu/
 Does **not** subclass `ESPARGOSApplication` — no pool, no backlog needed. Uses `QApplication` + `QQmlApplicationEngine` directly, reusing `demos/common` QML components for visual style.
 
 **`DemoScanner(QObject)`** — exposed to QML as `"scanner"` context property:
-- `__init__`: walks `../../demos/*/demo-menuitem.yaml` relative to its own directory, parses each with PyYAML, builds `self._items` list of dicts (`name`, `description`, `command`, `requires`, `demo_dir`).
+- `__init__`: walks every immediate subdirectory of `demos/` (relative to `menu.py`). Skips `common/` (hardcoded exclusion). For each other folder: if `demo-menuitem.yaml` is missing → `logging.warning()`; if present and `hidden: true` → skip silently; otherwise → add to `self._items` list of dicts (`name`, `description`, `command`, `requires`, `demo_dir`).
 - `demoItems` — `@pyqtProperty(list, constant=True)`: returns the scanned list.
 - `@pyqtSlot(int, str, bool)` `launchDemo(index, ip, single_array)`: resolves placeholders via `str.format_map({"single_array": f"-s {ip}" if single_array else "", "ip": ip})`, calls `subprocess.Popen(cmd_parts, cwd=demo_dir)`. Returns immediately — menu stays open.
 
@@ -267,12 +295,13 @@ Top-level `Common.ESPARGOSApplication` window (reuses dark theme and window chro
 
 ### Planned commit sequence
 
-1. `chore(demos-menu)`: add `demo-menuitem.yaml` to all 12 existing demo folders
-2. `feat(demos-menu)`: add `DemoScanner` and `CommonSettings` Python backend (`demos-menu.py`)
+1. `chore(demos-menu)`: add `demo-menuitem.yaml` to all 12 demo folders + hidden entry in `demos-menu/`
+2. `feat(demos-menu)`: add `DemoScanner` and `CommonSettings` Python backend (`demos-menu.py`) + thin `demos/menu.py` launcher
 3. `feat(demos-menu)`: add `demos-menu.qml` main window
 4. `feat(demos-menu)`: add `DemoCard.qml` component
 5. `fix`: any issues found during testing
 
 ### Before each commit
-- `python -c "import yaml, pathlib; list(pathlib.Path('demos').glob('*/demo-menuitem.yaml'))"` — verify all yamls scannable
-- Run `python demos/demos-menu/demos-menu.py` briefly to verify no import errors and demo grid populates
+- `python -c "import yaml, pathlib; print(list(pathlib.Path('demos').glob('*/demo-menuitem.yaml')))"` — verify all yamls present
+- `python -c "import sys; sys.path.insert(0, '.'); exec(open('demos/menu.py').read())"` — import check
+- Run `python demos/menu.py` briefly, verify demo grid populates and missing-file warnings fire for any folder without a yaml
