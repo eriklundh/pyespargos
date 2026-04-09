@@ -9,6 +9,9 @@ import pathlib
 import yaml
 
 from PyQt6.QtCore import QObject, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtQml import QQmlApplicationEngine
+from PyQt6.QtCore import QUrl
 
 log = logging.getLogger(__name__)
 
@@ -127,3 +130,52 @@ class CommonSettings(QObject):
         self._settings_path.write_text(
             json.dumps({"ip": self._ip, "single_array": self._single_array}, indent=2)
         )
+
+
+class ScannerAdapter(QObject):
+    """Qt/QML adapter around DemoScanner.
+
+    Converts Path objects to strings so demoItems is fully JSON-serialisable
+    and safe to expose to QML as a list property.
+    """
+
+    def __init__(self, demos_root: pathlib.Path, parent=None):
+        super().__init__(parent)
+        scanner = DemoScanner(demos_root)
+        self._items = [
+            {
+                "name": item["name"],
+                "description": item["description"],
+                "command": item["command"],
+                "requires": item["requires"],
+                "demo_dir": str(item["demo_dir"]),
+            }
+            for item in scanner.items
+        ]
+
+    @pyqtProperty(list, constant=True)
+    def demoItems(self) -> list:
+        return self._items
+
+
+def run(demos_root: pathlib.Path, settings_path: pathlib.Path = None):
+    """Entry point: create QApplication, load QML, exec event loop."""
+    import sys
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    engine = QQmlApplicationEngine()
+
+    settings = CommonSettings(settings_path=settings_path)
+    adapter = ScannerAdapter(demos_root)
+
+    engine.rootContext().setContextProperty("settings", settings)
+    engine.rootContext().setContextProperty("scanner", adapter)
+
+    qml_file = pathlib.Path(__file__).parent / "demos-menu.qml"
+    engine.load(QUrl.fromLocalFile(str(qml_file)))
+
+    if not engine.rootObjects():
+        log.error("Failed to load QML — check demos-menu.qml for errors")
+        return 1
+
+    return app.exec()
