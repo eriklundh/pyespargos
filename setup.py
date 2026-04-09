@@ -21,12 +21,16 @@ setup(
         # Runtime dependencies for the demo applications
         "demos": [
             "PyQt6>=6.6",
+            "PyQt6-Charts>=6.6",
             "PyYAML>=6.0",
+            "matplotlib>=3.7",
         ],
         # Additional dependencies for running tests
         "dev": [
             "PyQt6>=6.6",
+            "PyQt6-Charts>=6.6",
             "PyYAML>=6.0",
+            "matplotlib>=3.7",
             "pytest>=7.0",
             "pytest-qt>=4.0",
         ],
