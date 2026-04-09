@@ -62,7 +62,7 @@ ApplicationWindow {
                         radius: 4
                         border.color: ipField.activeFocus ? "#4a9fc8" : "#3a4a54"
                     }
-                    onEditingFinished: settings.setIp(text)
+                    onTextChanged: settings.setIp(text)
                 }
 
                 RowLayout {

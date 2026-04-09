@@ -53,21 +53,43 @@ Rectangle {
             Layout.fillHeight: true
         }
 
-        Button {
-            text: "Launch"
-            enabled: card.meetsRequirements
-            Layout.alignment: Qt.AlignmentFlag.AlignRight
-            font.pixelSize: 12
-            implicitHeight: 28
-            onClicked: card.launchRequested()
+        RowLayout {
+            Layout.fillWidth: true
 
-            ToolTip.visible: !card.meetsRequirements && hovered
-            ToolTip.text: {
-                if (requires.indexOf("single_array") >= 0 && ip.length === 0)
-                    return "Configure the ESPARGOS IP address first"
-                if (requires.indexOf("multi_array") >= 0 && singleArray)
-                    return "Requires multi-array mode — disable single-array"
-                return ""
+            // Requires badge
+            Rectangle {
+                radius: 3
+                color: requires.indexOf("multi_array") >= 0 ? "#1a3a5a" : "#1a3a2a"
+                visible: requires.length > 0
+                implicitWidth: requiresLabel.implicitWidth + 8
+                implicitHeight: requiresLabel.implicitHeight + 4
+                Label {
+                    id: requiresLabel
+                    anchors.centerIn: parent
+                    text: requires.indexOf("multi_array") >= 0 ? "multi" : "single"
+                    font.pixelSize: 9
+                    color: requires.indexOf("multi_array") >= 0 ? "#5aaddd" : "#5add8a"
+                }
+            }
+
+            Item { Layout.fillWidth: true }
+
+            Button {
+                text: "Launch"
+                enabled: card.meetsRequirements
+                font.pixelSize: 12
+                implicitHeight: 28
+                onClicked: card.launchRequested()
+
+                ToolTip.visible: !card.meetsRequirements && hovered
+                ToolTip.delay: 400
+                ToolTip.text: {
+                    if (requires.indexOf("single_array") >= 0 && ip.length === 0)
+                        return "Configure the ESPARGOS IP address first"
+                    if (requires.indexOf("multi_array") >= 0 && singleArray)
+                        return "Requires multi-array mode — disable single-array"
+                    return ""
+                }
             }
         }
     }
