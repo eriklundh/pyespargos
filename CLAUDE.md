@@ -146,3 +146,66 @@ Expected output for both (app runs until timeout kills it — exit code 0 = pass
 - Calibration completes (~196–197 clusters)
 - `INFO:pyespargos.backlog:Started CSI backlog thread`
 - App runs indefinitely (killed by timeout, not by a crash)
+
+---
+
+## Qt GUI Development and Testing Conventions
+
+### Qt binding
+
+This project uses **PyQt6**, not PySide6. This matches pyespargos, which the menu app
+launches demos from. Never mix bindings in the same process.
+
+- Imports: `from PyQt6.QtWidgets import ...`, `from PyQt6.QtCore import ...`, etc.
+- Use `pyqtSignal` and `pyqtSlot` (not `Signal`/`Slot`).
+- Use fully-scoped enums: `Qt.AlignmentFlag.AlignCenter`, `Qt.Orientation.Horizontal`, etc.
+
+### QObject `__init__` ordering
+
+Always declare `self._` attributes before calling any method that references them —
+even within `__init__`. Read through every method called in `__init__` before finalising
+the attribute order. Failure mode: `AttributeError` at startup with no obvious traceback
+pointing to the init ordering mistake.
+
+### QML property mutability
+
+Before writing a QML binding that assigns to a Qt built-in property, check whether it is
+`isReadonly: true` in `plugins.qmltypes`. Silent binding errors produce no Python
+exception — the window simply never appears or renders incorrectly.
+
+File to grep: `.venv/lib/python3.*/site-packages/PyQt6/Qt6/qml/QtMultimedia/plugins.qmltypes`
+
+Known read-only property: `VideoOutput.videoSink`. Correct pattern: QML reads
+`videoOutput.videoSink` and passes it to Python via a `@pyqtSlot(QVideoSink)` in
+`Component.onCompleted`; Python pushes frames into the sink.
+
+### Testing stack
+
+- Use **pytest + pytest-qt** for all GUI tests.
+- Set `qt_api = "pyqt6"` under `[tool.pytest.ini_options]` in `pyproject.toml`. Note: `qt_api` is the config key; `PYTEST_QT_API` is a separate environment variable — do not confuse them.
+- Default test runs are **headless via `QT_QPA_PLATFORM=offscreen`**. This is the fast inner loop and should cover the majority of tests: widget logic, signal/slot wiring, state transitions, QProcess command construction for launching demos.
+- Use `qtbot.mouseClick()`, `qtbot.keyClick()`, `qtbot.waitSignal()`, and `QSignalSpy` for interactions and assertions.
+- Any QObject that loads a config file on startup must be constructed with an explicit `tmp_path`-based path in tests. Default paths point to `~/.config/` and will silently load real user state, causing tests to fail non-obviously (e.g. a setter appears to emit no signal because the value was already set).
+- After loading QML containing a `GridView` or `ListView`, call `qapp.processEvents()` before checking `.property("count")` — delegates are created asynchronously.
+
+### Integration tests (separate, slower tier)
+
+- Place integration tests under `tests/integration/` and mark them with `@pytest.mark.integration` so they don't run by default.
+- Run them with: `xvfb-run -a pytest -m integration tests/integration/`
+- Force software rendering on the Pi 5 to avoid VideoCore quirks under Xvfb:
+  set `LIBGL_ALWAYS_SOFTWARE=1` and optionally `QT_QUICK_BACKEND=software`.
+- Integration tests may screenshot the app and save artifacts to `tests/integration/artifacts/` for inspection. For full-screen grabs under Xvfb use `qapp.primaryScreen().grabWindow(0)` — `QWindow` has no `grabWindow` method. For widget-only grabs, `QWidget.grab()` works without a screen.
+
+### Mocking demo launches
+
+The menu app launches pyespargos demos via `QProcess`. In unit tests, **mock the launch
+and assert on the command/arguments** — do NOT actually start demo processes. Real demo
+launches require ESPARGOS hardware and should only happen in a small handful of
+explicitly-marked smoke tests, not in the default test run.
+
+### Development loop expectations
+
+- The fast headless test suite (`pytest` with offscreen QPA) is the primary loop. Keep it
+  fast and deterministic so it can be run frequently during iteration.
+- Do not add tests that depend on the real labwc/Wayland desktop session — those are
+  verified manually.
