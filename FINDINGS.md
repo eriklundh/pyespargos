@@ -162,3 +162,117 @@ VideoOutput {
 - **No-camera path**: `cameraEnabled` is `False` and `isQtCamera`/`isPicamera2` are both `False`; `CaptureSession.camera` and `VideoOutput.videoSink` are both `null`.
 
 Everything from line 20 onward (ShaderEffect, Canvas elements, statistics, timers, Connections) is **not touched**.
+
+---
+
+## Implementation plan (pending) — demos-menu
+
+### Goal
+A standalone touch-friendly launcher app at `demos/demos-menu/` that scans all demo subdirectories for `demo-menuitem.yaml`, builds a menu, collects common ESPARGOS parameters once, and launches the selected demo as a subprocess. Menu stays open after launch.
+
+---
+
+### `demo-menuitem.yaml` format (one file per demo folder)
+
+```yaml
+name: "Camera Overlay"
+description: "Overlay received power on top of a live camera image"
+command: "python camera.py {single_array}"
+requires:
+  - single_array
+```
+
+**Placeholder tokens** (substituted via `str.format_map()` at launch time):
+- `{single_array}` → `-s {ip}` when single-array mode is active and IP is set; empty string otherwise
+- `{ip}` → raw IP/hostname only (for demos that build their own flag)
+
+**`requires` values** (used to grey out cards):
+- `single_array` — greyed out if the IP field is empty
+- `multi_array` — greyed out if single-array mode is selected
+
+**Demo classification:**
+
+| Demo | requires |
+|------|----------|
+| azimuth-delay | multi_array |
+| camera | multi_array |
+| cfo-viewer | single_array |
+| combined-array | multi_array |
+| combined-array-calibration | multi_array |
+| instantaneous-csi | single_array |
+| music-spectrum | single_array |
+| phases-over-space | single_array |
+| phases-over-time | single_array |
+| polarization | multi_array |
+| radiation-pattern-3d | multi_array |
+| speedtest | single_array |
+| tdoas-over-time | single_array |
+
+---
+
+### `demos/demos-menu/` file structure
+
+```
+demos/demos-menu/
+    demos-menu.py          # QApplication launcher (not ESPARGOSApplication — no pool needed)
+    demos-menu.qml         # main window: settings panel + demo grid
+    DemoCard.qml           # individual demo card component
+```
+
+---
+
+### `demos-menu.py`
+
+Does **not** subclass `ESPARGOSApplication` — no pool, no backlog needed. Uses `QApplication` + `QQmlApplicationEngine` directly, reusing `demos/common` QML components for visual style.
+
+**`DemoScanner(QObject)`** — exposed to QML as `"scanner"` context property:
+- `__init__`: walks `../../demos/*/demo-menuitem.yaml` relative to its own directory, parses each with PyYAML, builds `self._items` list of dicts (`name`, `description`, `command`, `requires`, `demo_dir`).
+- `demoItems` — `@pyqtProperty(list, constant=True)`: returns the scanned list.
+- `@pyqtSlot(int, str, bool)` `launchDemo(index, ip, single_array)`: resolves placeholders via `str.format_map({"single_array": f"-s {ip}" if single_array else "", "ip": ip})`, calls `subprocess.Popen(cmd_parts, cwd=demo_dir)`. Returns immediately — menu stays open.
+
+**`CommonSettings(QObject)`** — exposed to QML as `"settings"` context property:
+- Properties: `ip` (str), `singleArray` (bool) with `pyqtSignal` notifiers.
+- Persisted to `~/.config/espargos-demos/settings.json` on change, loaded on startup.
+- `@pyqtSlot` setters save and emit change signals.
+
+---
+
+### `demos-menu.qml`
+
+Top-level `Common.ESPARGOSApplication` window (reuses dark theme and window chrome from camera app):
+
+- **Left panel** (~250 px): `ip` text field, single-array toggle (`CheckBox`), status badge (green/grey based on whether IP is set).
+- **Main area**: `GridView` of `DemoCard` components, model bound to `scanner.demoItems`. Touch-friendly card size (~160×120 px minimum).
+- Visual style: `#222a2f`/`#333333` background, Material controls, same palette as camera app.
+
+---
+
+### `DemoCard.qml`
+
+```
+┌─────────────────────────┐
+│  Name (bold, white)     │
+│  Description (grey)     │
+│                         │
+│  [  Launch  ]           │  ← disabled + ToolTip if requires not met
+└─────────────────────────┘
+```
+
+- `property bool meetsRequirements`: computed from `requires` list vs current `settings.ip` / `settings.singleArray`.
+- Button `enabled: meetsRequirements` — drives opacity and interactivity.
+- `ToolTip` explains why disabled (e.g. "Requires multi-array configuration — set multiple hosts").
+- `onClicked`: calls `scanner.launchDemo(index, settings.ip, settings.singleArray)`.
+
+---
+
+### Planned commit sequence
+
+1. `chore(demos-menu)`: add `demo-menuitem.yaml` to all 12 existing demo folders
+2. `feat(demos-menu)`: add `DemoScanner` and `CommonSettings` Python backend (`demos-menu.py`)
+3. `feat(demos-menu)`: add `demos-menu.qml` main window
+4. `feat(demos-menu)`: add `DemoCard.qml` component
+5. `fix`: any issues found during testing
+
+### Before each commit
+- `python -c "import yaml, pathlib; list(pathlib.Path('demos').glob('*/demo-menuitem.yaml'))"` — verify all yamls scannable
+- Run `python demos/demos-menu/demos-menu.py` briefly to verify no import errors and demo grid populates
