@@ -1,0 +1,5 @@
+name: "Combined Array Calibration"
+description: "Calibrate a combined multi-board ESPARGOS array."
+command: "python combined-array-calibration.py"
+requires:
+  - multi_array

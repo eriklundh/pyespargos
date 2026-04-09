@@ -1,0 +1,5 @@
+name: "Speedtest"
+description: "Measure CSI packet throughput from the ESPARGOS board."
+command: "python speedtest.py {single_array}"
+requires:
+  - single_array

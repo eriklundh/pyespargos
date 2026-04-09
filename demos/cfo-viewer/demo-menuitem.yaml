@@ -1,0 +1,5 @@
+name: "CFO Viewer"
+description: "Show the latest carrier frequency offset value for each antenna."
+command: "python cfo-viewer.py {single_array}"
+requires:
+  - single_array

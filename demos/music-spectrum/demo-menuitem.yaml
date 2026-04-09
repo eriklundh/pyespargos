@@ -1,0 +1,5 @@
+name: "MUSIC Spectrum"
+description: "Show MUSIC angle-of-arrival spectrum."
+command: "python music-spectrum.py {single_array}"
+requires:
+  - single_array

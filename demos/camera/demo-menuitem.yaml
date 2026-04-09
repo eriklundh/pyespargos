@@ -1,0 +1,5 @@
+name: "Camera Overlay"
+description: "Overlay received beamspace power on top of a live camera image."
+command: "python camera.py {single_array}"
+requires:
+  - multi_array

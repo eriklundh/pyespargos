@@ -1,0 +1,5 @@
+name: "Phases Over Time"
+description: "Show CSI phase evolution over time."
+command: "python phases-over-time.py {single_array}"
+requires:
+  - single_array
