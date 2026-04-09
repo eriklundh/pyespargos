@@ -72,7 +72,7 @@ The following demos are provided in the `demos` folder of this repository:
 | `speedtest` | Measure CSI packet throughput from ESPARGOS. |
 | `combined-array` | Combine multiple ESPARGOS arrays into one large antenna array and visualize the average received phase for each antenna. Requires multiple ESPARGOS arrays. |
 | `combined-array-calibration` | Tool for calibrating combined multi-board antenna arrays. Visualizes and exports calibration data. |
-| `camera` | Overlay WiFi spatial spectrum on a live camera feed. Supports USB/V4L2 cameras (Qt backend) and Raspberry Pi CSI cameras (Picamera2 backend). Requires shaders to be compiled first (see `demos/camera/README.md`). |
+| `camera` | Overlay WiFi spatial spectrum on a live camera feed. Requires shaders to be compiled first (see `demos/camera/README.md`). |
 | `radiation-pattern-3d` | Interactive 3D radiation pattern visualization. Requires additional packages (see [`demos/radiation-pattern-3d/README.md`](demos/radiation-pattern-3d/README.md)). |
 | `demos-menu` | Touch-friendly launcher menu for all ESPARGOS demos. Run with `python demos/menu.py`. No ESPARGOS-specific arguments needed — configure the IP address from within the UI. |
 
@@ -125,19 +125,6 @@ source .venv/bin/activate
 ```
 
 > **Note:** You need to run `source .venv/bin/activate` (from the `pyespargos` directory) every time you open a new terminal before using *pyespargos*.
-
-> **Raspberry Pi + Picamera2:** If you plan to use the `picamera2` camera backend with a CSI camera (e.g. HQ Camera Module), create the venv with `--system-site-packages` so it can see the system-installed `picamera2` package:
-> ```bash
-> python3 -m venv .venv --system-site-packages
-> ```
-> If you already have a venv without this flag, delete it and recreate it:
-> ```bash
-> rm -rf .venv
-> python3 -m venv .venv --system-site-packages
-> source .venv/bin/activate
-> pip install -e ".[demos]"
-> ```
-> A venv created without `--system-site-packages` cannot see `picamera2` even if it is installed system-wide (`sudo apt install python3-picamera2`).
 
 #### 4. Install pyespargos
 
