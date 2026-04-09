@@ -8,7 +8,7 @@ import logging
 import pathlib
 import yaml
 
-from PyQt6.QtCore import QObject, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, pyqtProperty, pyqtSignal, pyqtSlot, QProcess
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtQml import QQmlApplicationEngine
 from PyQt6.QtCore import QUrl
@@ -19,6 +19,23 @@ _DEFAULT_SETTINGS_PATH = pathlib.Path.home() / ".config" / "espargos-demos" / "s
 
 # Folders under demos/ that are never runnable demos — skip without warning.
 _SCAN_EXCLUDES = {"common"}
+
+
+def build_command(command_template: str, ip: str, single_array: bool) -> list[str]:
+    """Resolve placeholder tokens in a command template and split into a list.
+
+    Tokens:
+        {single_array} → "-s <ip>" when single_array is True and ip is non-empty;
+                         empty string otherwise (token removed from arg list).
+        {ip}           → the raw ip string.
+    """
+    single_array_value = f"-s {ip}" if (single_array and ip) else ""
+    resolved = command_template.format_map({
+        "single_array": single_array_value,
+        "ip": ip,
+    })
+    # Split and discard empty tokens (from collapsed {single_array} placeholders)
+    return [part for part in resolved.split() if part]
 
 
 class DemoScanner:
@@ -156,6 +173,21 @@ class ScannerAdapter(QObject):
     @pyqtProperty(list, constant=True)
     def demoItems(self) -> list:
         return self._items
+
+    @pyqtSlot(int, str, bool)
+    def launchDemo(self, index: int, ip: str, single_array: bool):
+        if index < 0 or index >= len(self._items):
+            log.warning("launchDemo: index %d out of range (have %d items)", index, len(self._items))
+            return
+        item = self._items[index]
+        cmd = build_command(item["command"], ip=ip, single_array=single_array)
+        if not cmd:
+            log.warning("launchDemo: empty command for '%s'", item["name"])
+            return
+        proc = QProcess()
+        proc.setWorkingDirectory(item["demo_dir"])
+        proc.start(cmd[0], cmd[1:])
+        log.info("Launched '%s': %s (cwd=%s)", item["name"], cmd, item["demo_dir"])
 
 
 def run(demos_root: pathlib.Path, settings_path: pathlib.Path = None):
