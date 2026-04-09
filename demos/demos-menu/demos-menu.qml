@@ -98,17 +98,39 @@ ApplicationWindow {
             }
         }
 
-        // ── Right panel: demo grid placeholder ───────────────────────────
+        // ── Right panel: demo grid ───────────────────────────────────────
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             color: "#222a2f"
 
-            Label {
-                anchors.centerIn: parent
-                text: "Demos grid coming in step 5"
-                color: "#4a6070"
-                font.pixelSize: 16
+            GridView {
+                id: demoGrid
+                objectName: "demoGrid"
+                anchors.fill: parent
+                anchors.margins: 16
+                cellWidth: 224
+                cellHeight: 154
+                model: scanner.demoItems
+
+                delegate: Item {
+                    width: demoGrid.cellWidth
+                    height: demoGrid.cellHeight
+
+                    DemoCard {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        demoName: modelData.name
+                        demoDescription: modelData.description
+                        requires: modelData.requires
+                        ip: settings.ip
+                        singleArray: settings.singleArray
+
+                        onLaunchRequested: {
+                            scanner.launchDemo(index, settings.ip, settings.singleArray)
+                        }
+                    }
+                }
             }
         }
     }
