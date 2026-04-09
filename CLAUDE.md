@@ -160,12 +160,33 @@ launches demos from. Never mix bindings in the same process.
 - Use `pyqtSignal` and `pyqtSlot` (not `Signal`/`Slot`).
 - Use fully-scoped enums: `Qt.AlignmentFlag.AlignCenter`, `Qt.Orientation.Horizontal`, etc.
 
+### QObject `__init__` ordering
+
+Always declare `self._` attributes before calling any method that references them —
+even within `__init__`. Read through every method called in `__init__` before finalising
+the attribute order. Failure mode: `AttributeError` at startup with no obvious traceback
+pointing to the init ordering mistake.
+
+### QML property mutability
+
+Before writing a QML binding that assigns to a Qt built-in property, check whether it is
+`isReadonly: true` in `plugins.qmltypes`. Silent binding errors produce no Python
+exception — the window simply never appears or renders incorrectly.
+
+File to grep: `.venv/lib/python3.*/site-packages/PyQt6/Qt6/qml/QtMultimedia/plugins.qmltypes`
+
+Known read-only property: `VideoOutput.videoSink`. Correct pattern: QML reads
+`videoOutput.videoSink` and passes it to Python via a `@pyqtSlot(QVideoSink)` in
+`Component.onCompleted`; Python pushes frames into the sink.
+
 ### Testing stack
 
 - Use **pytest + pytest-qt** for all GUI tests.
-- Set `PYTEST_QT_API=pyqt6` in `pytest.ini` (or `pyproject.toml`) so pytest-qt doesn't guess the binding.
+- Set `qt_api = "pyqt6"` under `[tool.pytest.ini_options]` in `pyproject.toml`. Note: `qt_api` is the config key; `PYTEST_QT_API` is a separate environment variable — do not confuse them.
 - Default test runs are **headless via `QT_QPA_PLATFORM=offscreen`**. This is the fast inner loop and should cover the majority of tests: widget logic, signal/slot wiring, state transitions, QProcess command construction for launching demos.
 - Use `qtbot.mouseClick()`, `qtbot.keyClick()`, `qtbot.waitSignal()`, and `QSignalSpy` for interactions and assertions.
+- Any QObject that loads a config file on startup must be constructed with an explicit `tmp_path`-based path in tests. Default paths point to `~/.config/` and will silently load real user state, causing tests to fail non-obviously (e.g. a setter appears to emit no signal because the value was already set).
+- After loading QML containing a `GridView` or `ListView`, call `qapp.processEvents()` before checking `.property("count")` — delegates are created asynchronously.
 
 ### Integration tests (separate, slower tier)
 
@@ -173,8 +194,7 @@ launches demos from. Never mix bindings in the same process.
 - Run them with: `xvfb-run -a pytest -m integration tests/integration/`
 - Force software rendering on the Pi 5 to avoid VideoCore quirks under Xvfb:
   set `LIBGL_ALWAYS_SOFTWARE=1` and optionally `QT_QUICK_BACKEND=software`.
-- Integration tests may screenshot the app (via `QWidget.grab()` or `scrot`) and save
-  artifacts to `tests/integration/artifacts/` for inspection and golden-image diffing.
+- Integration tests may screenshot the app and save artifacts to `tests/integration/artifacts/` for inspection. For full-screen grabs under Xvfb use `qapp.primaryScreen().grabWindow(0)` — `QWindow` has no `grabWindow` method. For widget-only grabs, `QWidget.grab()` works without a screen.
 
 ### Mocking demo launches
 

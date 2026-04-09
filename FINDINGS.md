@@ -163,6 +163,8 @@ VideoOutput {
 
 Everything from line 20 onward (ShaderEffect, Canvas elements, statistics, timers, Connections) is **not touched**.
 
+> **Pitfall:** `VideoOutput.videoSink` is `isReadonly: true` in `plugins.qmltypes`. An earlier attempt assigned it directly from QML (`videoSink: WebCam.picamera2VideoSink`), which produced a silent binding error — no Python exception, but the window never appeared. The fix inverts the direction: QML reads `videoOutput.videoSink` and hands it to Python via `WebCam.setVideoSink(videoOutput.videoSink)` in `Component.onCompleted`. Always check `plugins.qmltypes` before writing a QML binding to a Qt built-in property.
+
 ---
 
 ## Implementation plan (pending) — demos-menu
