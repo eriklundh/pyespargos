@@ -34,12 +34,32 @@ This prints all cameras found across both backends (Qt/V4L2 devices and Picamera
 
 ### Picamera2 requirements
 
-The Picamera2 backend requires the `picamera2` package. On Raspberry Pi OS it is usually pre-installed. If not:
+The Picamera2 backend requires the `picamera2` package. On Raspberry Pi OS it is usually pre-installed system-wide. If not:
 
 ```bash
 sudo apt install python3-picamera2
-# or inside a venv created with --system-site-packages:
+```
+
+**Important — virtual environment must use `--system-site-packages`:**
+`picamera2` is a system package and cannot be installed inside a normal isolated venv via `pip`. The venv must be created with `--system-site-packages` so it can see the system installation:
+
+```bash
 python3 -m venv .venv --system-site-packages
+```
+
+If you already have a venv without this flag, delete it and recreate it:
+
+```bash
+rm -rf .venv
+python3 -m venv .venv --system-site-packages
+source .venv/bin/activate
+pip install -e ".[demos]"   # reinstall pyespargos + demo deps
+```
+
+After recreating the venv, verify picamera2 is visible:
+
+```bash
+python -c "import picamera2; print('OK')"
 ```
 
 ## Shader Compilation

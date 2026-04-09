@@ -126,6 +126,19 @@ source .venv/bin/activate
 
 > **Note:** You need to run `source .venv/bin/activate` (from the `pyespargos` directory) every time you open a new terminal before using *pyespargos*.
 
+> **Raspberry Pi + Picamera2:** If you plan to use the `picamera2` camera backend with a CSI camera (e.g. HQ Camera Module), create the venv with `--system-site-packages` so it can see the system-installed `picamera2` package:
+> ```bash
+> python3 -m venv .venv --system-site-packages
+> ```
+> If you already have a venv without this flag, delete it and recreate it:
+> ```bash
+> rm -rf .venv
+> python3 -m venv .venv --system-site-packages
+> source .venv/bin/activate
+> pip install -e ".[demos]"
+> ```
+> A venv created without `--system-site-packages` cannot see `picamera2` even if it is installed system-wide (`sudo apt install python3-picamera2`).
+
 #### 4. Install pyespargos
 
 ```bash
