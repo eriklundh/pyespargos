@@ -122,7 +122,9 @@ ApplicationWindow {
                         anchors.margins: 8
                         demoName: modelData.name
                         demoDescription: modelData.description
-                        requires: modelData.requires
+                        combinedArrayOnly: modelData.combined_array_only ?? false
+                        singleArrayOnly:   modelData.single_array_only   ?? false
+                        disabled:          modelData.disabled             ?? false
                         ip: settings.ip
                         singleArray: settings.singleArray
 
