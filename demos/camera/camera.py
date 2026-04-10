@@ -38,6 +38,7 @@ class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin,
     azimuthCorrectionChanged = PyQt6.QtCore.pyqtSignal()
     elevationCorrectionChanged = PyQt6.QtCore.pyqtSignal()
     cameraEnabledChanged = PyQt6.QtCore.pyqtSignal()
+    cameraBackendChanged = PyQt6.QtCore.pyqtSignal()
 
     DEFAULT_CONFIG = {
         "receiver": {"mac_list_enabled": False},
@@ -134,11 +135,12 @@ class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin,
 
         # Camera setup (if enabled in config)
         if self.appconfig.get("camera", "enable"):
-            self.videocamera = videocamera.make_video_camera(
+            self.videocamera = videocamera.CombinedVideoCamera(
                 self.args.camera_backend,
                 self.appconfig.get("camera", "device"),
                 self.appconfig.get("camera", "format"),
             )
+            self.videocamera.backendChanged.connect(self.cameraBackendChanged)
 
             # Let UI know about currently selected camera device and format
             self.appconfig.set(
@@ -745,13 +747,15 @@ class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin,
     def cameraEnabled(self):
         return bool(self.appconfig.get("camera", "enable"))
 
-    @PyQt6.QtCore.pyqtProperty(bool, constant=True)
+    @PyQt6.QtCore.pyqtProperty(bool, notify=cameraBackendChanged)
     def isQtCamera(self):
-        return isinstance(self.videocamera, videocamera.VideoCamera)
+        return (isinstance(self.videocamera, videocamera.CombinedVideoCamera)
+                and self.videocamera.isQtBackend)
 
-    @PyQt6.QtCore.pyqtProperty(bool, constant=True)
+    @PyQt6.QtCore.pyqtProperty(bool, notify=cameraBackendChanged)
     def isPicamera2(self):
-        return isinstance(self.videocamera, videocamera.Picamera2VideoCamera)
+        return (isinstance(self.videocamera, videocamera.CombinedVideoCamera)
+                and self.videocamera.isPicamera2Backend)
 
     @PyQt6.QtCore.pyqtProperty(float, constant=False, notify=azimuthCorrectionChanged)
     def azimuth_correction(self):
