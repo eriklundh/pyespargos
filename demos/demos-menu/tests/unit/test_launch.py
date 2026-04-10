@@ -3,7 +3,7 @@ import pathlib
 import pytest
 from unittest.mock import patch, MagicMock, call
 
-from demos_menu import ScannerAdapter, build_command
+from demos_menu import CommonSettings, DemoScanner, ScannerAdapter, build_command
 
 
 DEMOS_ROOT = pathlib.Path(__file__).parents[3]
@@ -43,7 +43,8 @@ def test_ip_placeholder_substituted():
 # ---------------------------------------------------------------------------
 
 def test_launch_demo_calls_qprocess_start(qapp, tmp_path):
-    adapter = ScannerAdapter(DEMOS_ROOT)
+    settings = CommonSettings(settings_path=tmp_path / "s.json")
+    adapter = ScannerAdapter(DemoScanner(DEMOS_ROOT), settings)
     with patch("demos_menu.QProcess") as MockQProcess:
         mock_proc = MagicMock()
         MockQProcess.return_value = mock_proc
@@ -52,7 +53,8 @@ def test_launch_demo_calls_qprocess_start(qapp, tmp_path):
 
 
 def test_launch_demo_sets_working_directory(qapp, tmp_path):
-    adapter = ScannerAdapter(DEMOS_ROOT)
+    settings = CommonSettings(settings_path=tmp_path / "s.json")
+    adapter = ScannerAdapter(DemoScanner(DEMOS_ROOT), settings)
     with patch("demos_menu.QProcess") as MockQProcess:
         mock_proc = MagicMock()
         MockQProcess.return_value = mock_proc
@@ -63,7 +65,8 @@ def test_launch_demo_sets_working_directory(qapp, tmp_path):
 
 
 def test_launch_demo_passes_correct_command(qapp, tmp_path):
-    adapter = ScannerAdapter(DEMOS_ROOT)
+    settings = CommonSettings(settings_path=tmp_path / "s.json")
+    adapter = ScannerAdapter(DemoScanner(DEMOS_ROOT), settings)
     item = adapter.demoItems[0]
     expected_cmd = build_command(item["command"], ip="192.168.1.2", single_array=True)
 
@@ -74,7 +77,8 @@ def test_launch_demo_passes_correct_command(qapp, tmp_path):
         mock_proc.start.assert_called_once_with(expected_cmd[0], expected_cmd[1:])
 
 
-def test_launch_demo_invalid_index_does_not_crash(qapp):
-    adapter = ScannerAdapter(DEMOS_ROOT)
+def test_launch_demo_invalid_index_does_not_crash(qapp, tmp_path):
+    settings = CommonSettings(settings_path=tmp_path / "s.json")
+    adapter = ScannerAdapter(DemoScanner(DEMOS_ROOT), settings)
     with patch("demos_menu.QProcess"):
         adapter.launchDemo(999, "192.168.1.2", True)  # should log warning, not raise

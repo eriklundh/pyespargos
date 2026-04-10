@@ -23,17 +23,16 @@ def demos_root(tmp_path):
         "name: Speedtest\n"
         "description: Measure throughput\n"
         "command: python speedtest.py {single_array}\n"
-        "requires:\n  - single_array\n"
     )
 
-    # A normal multi-array demo
+    # A combined-array-only demo
     d2 = tmp_path / "camera"
     d2.mkdir()
     (d2 / "demo-menuitem.yaml").write_text(
         "name: Camera Overlay\n"
         "description: Camera beamspace overlay\n"
         "command: python camera.py {single_array}\n"
-        "requires:\n  - multi_array\n"
+        "combined_array_only: true\n"
     )
 
     # Hidden entry (demos-menu itself)
@@ -86,9 +85,17 @@ def test_item_fields_populated(demos_root):
     item = next(i for i in scanner.items if i["name"] == "Speedtest")
     assert item["description"] == "Measure throughput"
     assert item["command"] == "python speedtest.py {single_array}"
-    assert item["requires"] == ["single_array"]
+    assert item["combined_array_only"] is False
+    assert item["single_array_only"] is False
+    assert item["disabled"] is False
     assert isinstance(item["demo_dir"], pathlib.Path)
     assert item["demo_dir"].name == "speedtest"
+
+
+def test_combined_array_only_flag_parsed(demos_root):
+    scanner = DemoScanner(demos_root)
+    item = next(i for i in scanner.items if i["name"] == "Camera Overlay")
+    assert item["combined_array_only"] is True
 
 
 def test_item_count(demos_root):
