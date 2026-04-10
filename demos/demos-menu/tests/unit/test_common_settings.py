@@ -20,8 +20,8 @@ def test_default_ip_is_empty(settings):
     assert settings.ip == ""
 
 
-def test_default_single_array_is_false(settings):
-    assert settings.singleArray is False
+def test_default_single_array_is_true(settings):
+    assert settings.singleArray is True
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +53,7 @@ def test_set_single_array_updates_value(settings):
 
 def test_set_single_array_emits_signal(settings):
     spy = QSignalSpy(settings.singleArrayChanged)
-    settings.setSingleArray(True)
+    settings.setSingleArray(False)  # default is True, so False triggers a change
     assert len(spy) == 1
 
 
@@ -92,7 +92,7 @@ def test_missing_settings_file_uses_defaults(qapp, tmp_path):
     settings_file = tmp_path / "nonexistent.json"
     s = CommonSettings(settings_path=settings_file)
     assert s.ip == ""
-    assert s.singleArray is False
+    assert s.singleArray is True
 
 
 def test_corrupt_settings_file_uses_defaults(qapp, tmp_path):
@@ -100,4 +100,4 @@ def test_corrupt_settings_file_uses_defaults(qapp, tmp_path):
     settings_file.write_text("this is not json {{{")
     s = CommonSettings(settings_path=settings_file)
     assert s.ip == ""
-    assert s.singleArray is False
+    assert s.singleArray is True
