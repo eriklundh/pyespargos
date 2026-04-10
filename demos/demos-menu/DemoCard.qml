@@ -28,6 +28,12 @@ Rectangle {
     border.color: meetsRequirements ? "#3a5a6a" : "#2a3238"
     opacity: meetsRequirements ? 1.0 : 0.5
 
+    // Make the entire card tappable on touch screens.
+    TapHandler {
+        enabled: card.meetsRequirements
+        onTapped: card.launchRequested()
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 14
@@ -72,13 +78,12 @@ Rectangle {
                 }
             }
 
-            Item { Layout.fillWidth: true }
-
             Button {
                 text: "Launch"
                 enabled: card.meetsRequirements
                 font.pixelSize: 12
                 implicitHeight: 28
+                Layout.fillWidth: true
                 onClicked: card.launchRequested()
 
                 ToolTip.visible: !card.meetsRequirements && hovered
