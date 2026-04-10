@@ -7,4 +7,5 @@ qt_default_raising = true
 testpaths = ["demos/demos-menu/tests"]
 markers = [
     "integration: marks tests as integration tests (run with xvfb-run -a pytest -m integration)",
+    "hardware: marks tests requiring a connected ESPARGOS board and camera(s) (run with --espargos-ip)",
 ]
