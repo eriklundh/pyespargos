@@ -1,5 +1,3 @@
-name: "Polarization"
-description: "Measure and display dominant polarization of incoming signals."
-command: "python polarization.py {single_array}"
-requires:
-  - multi_array
+name: Polarization
+description: Measure and display dominant polarization of incoming signals.
+command: python polarization.py {single_array}
