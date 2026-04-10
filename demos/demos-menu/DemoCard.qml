@@ -8,16 +8,17 @@ Rectangle {
 
     property string demoName: ""
     property string demoDescription: ""
-    property var requires: []
+    property bool combinedArrayOnly: false    // hidden at model level — card never sees it
+    property bool singleArrayOnly:   false    // gray when singleArray is false
+    property bool disabled:          false    // always gray (under development)
     property string ip: ""
     property bool singleArray: false
 
-    property bool meetsRequirements: {
-        if (requires.length === 0) return true
-        if (requires.indexOf("single_array") >= 0 && ip.length === 0) return false
-        if (requires.indexOf("multi_array") >= 0 && singleArray) return false
-        return true
-    }
+    // Gray out if: disabled, single-array-only demo in multi-array mode, or no IP set.
+    property bool meetsRequirements:
+        !disabled &&
+        !(singleArrayOnly && !singleArray) &&
+        ip.length > 0
 
     signal launchRequested()
 
@@ -62,19 +63,19 @@ Rectangle {
         RowLayout {
             Layout.fillWidth: true
 
-            // Requires badge
+            // Badge: shown only for single-array-only demos (as a hint to the user).
             Rectangle {
                 radius: 3
-                color: requires.indexOf("multi_array") >= 0 ? "#1a3a5a" : "#1a3a2a"
-                visible: requires.length > 0
-                implicitWidth: requiresLabel.implicitWidth + 8
-                implicitHeight: requiresLabel.implicitHeight + 4
+                color: "#1a3a2a"
+                visible: card.singleArrayOnly
+                implicitWidth: badgeLabel.implicitWidth + 8
+                implicitHeight: badgeLabel.implicitHeight + 4
                 Label {
-                    id: requiresLabel
+                    id: badgeLabel
                     anchors.centerIn: parent
-                    text: requires.indexOf("multi_array") >= 0 ? "multi" : "single"
+                    text: "single-only"
                     font.pixelSize: 9
-                    color: requires.indexOf("multi_array") >= 0 ? "#5aaddd" : "#5add8a"
+                    color: "#5add8a"
                 }
             }
 
@@ -89,10 +90,12 @@ Rectangle {
                 ToolTip.visible: !card.meetsRequirements && hovered
                 ToolTip.delay: 400
                 ToolTip.text: {
-                    if (requires.indexOf("single_array") >= 0 && ip.length === 0)
+                    if (card.disabled)
+                        return "This demo is not yet available"
+                    if (card.singleArrayOnly && !card.singleArray)
+                        return "Requires single-array mode"
+                    if (card.ip.length === 0)
                         return "Configure the ESPARGOS IP address first"
-                    if (requires.indexOf("multi_array") >= 0 && singleArray)
-                        return "Requires multi-array mode — disable single-array"
                     return ""
                 }
             }
