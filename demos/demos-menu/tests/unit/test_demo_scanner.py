@@ -1,5 +1,6 @@
 """Unit tests for DemoScanner — pure Python, no Qt required."""
 import pathlib
+import shlex
 import pytest
 import yaml
 
@@ -119,3 +120,18 @@ def test_real_demos_root_no_warnings(caplog):
         DemoScanner(real_root)
     missing = [m for m in caplog.messages if "no demo-menuitem.yaml" in m]
     assert missing == [], f"Unexpected missing yamls: {missing}"
+
+
+def test_all_demo_scripts_exist():
+    """Every demo's command references a script that exists in its demo_dir."""
+    real_root = pathlib.Path(__file__).parents[3]
+    scanner = DemoScanner(real_root)
+    for item in scanner.items:
+        tokens = shlex.split(item["command"])
+        # commands are "python <script>.py [args]"
+        assert len(tokens) >= 2, f"Unexpected command format: {item['command']}"
+        script = tokens[1]
+        script_path = item["demo_dir"] / script
+        assert script_path.exists(), (
+            f"Script not found for demo '{item['name']}': {script_path}"
+        )
