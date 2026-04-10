@@ -8,8 +8,8 @@ Rectangle {
 
 	CaptureSession {
 		id: captureSession
-		camera: backend.isQtCamera && backend.cameraEnabled ? WebCam : null
-		videoOutput: backend.isQtCamera ? videoOutput : null
+		camera: backend.cameraEnabled ? WebCam.activeQCamera : null
+		videoOutput: WebCam.isQtBackend ? videoOutput : null
 	}
 
 	VideoOutput {
@@ -17,8 +17,17 @@ Rectangle {
 		anchors.fill: parent
 
 		Component.onCompleted: {
-			if (backend.isPicamera2) {
+			if (WebCam.isPicamera2Backend) {
 				WebCam.setVideoSink(videoOutput.videoSink)
+			}
+		}
+
+		Connections {
+			target: WebCam
+			function onBackendChanged() {
+				if (WebCam.isPicamera2Backend) {
+					WebCam.setVideoSink(videoOutput.videoSink)
+				}
 			}
 		}
 	}
