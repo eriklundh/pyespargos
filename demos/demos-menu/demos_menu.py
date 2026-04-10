@@ -46,7 +46,9 @@ class DemoScanner:
     Folders with no yaml emit a WARNING.
 
     Attributes:
-        items: list of dicts with keys name, description, command, requires, demo_dir.
+        items: list of dicts with keys:
+            name, description, command, demo_dir,
+            combined_array_only, single_array_only, disabled.
     """
 
     def __init__(self, demos_root: pathlib.Path):
@@ -76,7 +78,9 @@ class DemoScanner:
                 "name": data["name"],
                 "description": data.get("description", ""),
                 "command": data.get("command", ""),
-                "requires": data.get("requires", []),
+                "combined_array_only": bool(data.get("combined_array_only", False)),
+                "single_array_only":   bool(data.get("single_array_only", False)),
+                "disabled":            bool(data.get("disabled", False)),
                 "demo_dir": folder,
             })
 
@@ -95,7 +99,7 @@ class CommonSettings(QObject):
         super().__init__(parent)
         self._settings_path = pathlib.Path(settings_path) if settings_path else _DEFAULT_SETTINGS_PATH
         self._ip = ""
-        self._single_array = False
+        self._single_array = True   # default: single-array mode (most users have one device)
         self._load()
 
     # ------------------------------------------------------------------
@@ -138,7 +142,7 @@ class CommonSettings(QObject):
         try:
             data = json.loads(self._settings_path.read_text())
             self._ip = data.get("ip", "")
-            self._single_array = bool(data.get("single_array", False))
+            self._single_array = bool(data.get("single_array", True))
         except (FileNotFoundError, json.JSONDecodeError, Exception):
             pass  # use defaults
 
@@ -152,34 +156,38 @@ class CommonSettings(QObject):
 class ScannerAdapter(QObject):
     """Qt/QML adapter around DemoScanner.
 
-    Converts Path objects to strings so demoItems is fully JSON-serialisable
-    and safe to expose to QML as a list property.
+    Filters combined_array_only items out of demoItems when single-array mode
+    is active. Converts Path objects to strings so demoItems is JSON-serialisable.
+
+    The demoItems property is dynamic: it re-evaluates when singleArray changes.
     """
 
-    def __init__(self, demos_root: pathlib.Path, parent=None):
-        super().__init__(parent)
-        scanner = DemoScanner(demos_root)
-        self._items = [
-            {
-                "name": item["name"],
-                "description": item["description"],
-                "command": item["command"],
-                "requires": item["requires"],
-                "demo_dir": str(item["demo_dir"]),
-            }
-            for item in scanner.items
-        ]
+    demoItemsChanged = pyqtSignal()
 
-    @pyqtProperty(list, constant=True)
+    def __init__(self, scanner: DemoScanner, settings: CommonSettings, parent=None):
+        super().__init__(parent)
+        self._scanner = scanner
+        self._settings = settings
+        settings.singleArrayChanged.connect(self.demoItemsChanged)
+
+    @pyqtProperty(list, notify=demoItemsChanged)
     def demoItems(self) -> list:
-        return self._items
+        result = []
+        for item in self._scanner.items:
+            if item["combined_array_only"] and self._settings.singleArray:
+                continue   # hide combined-array-only demos in single-array mode
+            d = dict(item)
+            d["demo_dir"] = str(d["demo_dir"])
+            result.append(d)
+        return result
 
     @pyqtSlot(int, str, bool)
     def launchDemo(self, index: int, ip: str, single_array: bool):
-        if index < 0 or index >= len(self._items):
-            log.warning("launchDemo: index %d out of range (have %d items)", index, len(self._items))
+        items = self.demoItems
+        if index < 0 or index >= len(items):
+            log.warning("launchDemo: index %d out of range (have %d items)", index, len(items))
             return
-        item = self._items[index]
+        item = items[index]
         cmd = build_command(item["command"], ip=ip, single_array=single_array)
         if not cmd:
             log.warning("launchDemo: empty command for '%s'", item["name"])
@@ -198,7 +206,8 @@ def run(demos_root: pathlib.Path, settings_path: pathlib.Path = None):
     engine = QQmlApplicationEngine()
 
     settings = CommonSettings(settings_path=settings_path)
-    adapter = ScannerAdapter(demos_root)
+    scanner = DemoScanner(demos_root)
+    adapter = ScannerAdapter(scanner, settings)
 
     engine.rootContext().setContextProperty("settings", settings)
     engine.rootContext().setContextProperty("scanner", adapter)
