@@ -11,6 +11,7 @@ ApplicationWindow {
     minimumWidth: 700
     minimumHeight: 400
     title: "ESPARGOS Demos"
+    visibility: backend_fullscreen ? ApplicationWindow.FullScreen : ApplicationWindow.Windowed
 
     Material.theme: Material.Dark
     Material.accent: Material.Blue

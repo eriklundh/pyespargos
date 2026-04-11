@@ -199,11 +199,12 @@ class ScannerAdapter(QObject):
 
 
 def run(demos_root: pathlib.Path, settings_path: pathlib.Path = None,
-        ip: str = None, single_array: bool = None):
+        ip: str = None, single_array: bool = None, fullscreen: bool = False):
     """Entry point: create QApplication, load QML, exec event loop.
 
     ip and single_array, when not None, override the persisted settings and
     re-persist them — equivalent to the user typing them in the settings panel.
+    fullscreen, when True, starts the window in fullscreen mode.
     """
     import sys
     app = QApplication.instance() or QApplication(sys.argv)
@@ -223,6 +224,7 @@ def run(demos_root: pathlib.Path, settings_path: pathlib.Path = None,
 
     engine.rootContext().setContextProperty("settings", settings)
     engine.rootContext().setContextProperty("scanner", adapter)
+    engine.rootContext().setContextProperty("backend_fullscreen", bool(fullscreen))
 
     qml_file = pathlib.Path(__file__).parent / "demos-menu.qml"
     engine.load(QUrl.fromLocalFile(str(qml_file)))
