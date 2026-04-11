@@ -198,14 +198,26 @@ class ScannerAdapter(QObject):
         log.info("Launched '%s': %s (cwd=%s)", item["name"], cmd, item["demo_dir"])
 
 
-def run(demos_root: pathlib.Path, settings_path: pathlib.Path = None):
-    """Entry point: create QApplication, load QML, exec event loop."""
+def run(demos_root: pathlib.Path, settings_path: pathlib.Path = None,
+        ip: str = None, single_array: bool = None):
+    """Entry point: create QApplication, load QML, exec event loop.
+
+    ip and single_array, when not None, override the persisted settings and
+    re-persist them — equivalent to the user typing them in the settings panel.
+    """
     import sys
     app = QApplication.instance() or QApplication(sys.argv)
 
     engine = QQmlApplicationEngine()
 
     settings = CommonSettings(settings_path=settings_path)
+
+    # CLI overrides take precedence over persisted settings (and re-persist).
+    if ip is not None:
+        settings.setIp(ip)
+    if single_array is not None:
+        settings.setSingleArray(single_array)
+
     scanner = DemoScanner(demos_root)
     adapter = ScannerAdapter(scanner, settings)
 
