@@ -13,18 +13,18 @@ set -euo pipefail
 #   demos-automenu.sh status
 #
 # How it works:
-#   labwc 0.9+ imports session variables into the systemd user instance via
-#   systemctl --user import-environment, but does not activate
-#   graphical-session.target. One line in ~/.config/labwc/autostart bridges
-#   that gap. The systemd unit uses WantedBy=graphical-session.target so it
-#   starts exactly once Wayland is ready.
+#   The service is WantedBy=default.target so it starts early in the user
+#   session (via loginctl linger at boot). Qt's Wayland plugin defaults to
+#   $XDG_RUNTIME_DIR/wayland-0 when WAYLAND_DISPLAY is unset. Since labwc on
+#   RPi OS Trixie always creates wayland-0, no explicit WAYLAND_DISPLAY is
+#   needed. Restart=on-failure + StartLimitIntervalSec=0 handles the race
+#   between the service starting and labwc creating the Wayland socket.
 #
-# 'on'  — write/replace the unit file, add labwc autostart hook, enable linger,
-#         enable and start the service.
+# 'on'  — write/replace the unit file, enable linger, enable and start.
 #         Re-running 'on' with different args replaces the ExecStart args.
-# 'off' — stop and disable the service, remove labwc autostart hook, disable linger.
+# 'off' — stop and disable the service, disable linger.
 #
-# Requires: systemd user session, loginctl, labwc, Python venv at .venv/
+# Requires: systemd user session, loginctl, Python venv at .venv/
 # ──────────────────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,8 +34,6 @@ MENU_SCRIPT="${REPO_ROOT}/demos/menu.py"
 SERVICE_NAME="demos-automenu"
 SERVICE_DIR="${HOME}/.config/systemd/user"
 SERVICE_FILE="${SERVICE_DIR}/${SERVICE_NAME}.service"
-LABWC_AUTOSTART="${HOME}/.config/labwc/autostart"
-AUTOSTART_MARKER="# demos-automenu"
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -90,41 +88,30 @@ cmd_on() {
         exec_start="${exec_start} ${menu_args[*]}"
     fi
 
-    # WAYLAND_DISPLAY and XDG_RUNTIME_DIR are already imported into the systemd
-    # user environment by labwc via systemctl --user import-environment.
-    # Only QT_QPA_PLATFORM needs to be set explicitly here.
+    # WantedBy=default.target: starts early in the linger session.
+    # Qt defaults to $XDG_RUNTIME_DIR/wayland-0 when WAYLAND_DISPLAY is unset —
+    # no need to hardcode the socket name.
+    # Restart=on-failure + StartLimitIntervalSec=0: retries until labwc creates
+    # the Wayland socket (race between linger startup and labwc/LightDM).
     cat > "${SERVICE_FILE}" <<EOF
 [Unit]
 Description=ESPARGOS Demos Menu
 Documentation=https://github.com/eriklundh/pyespargos
-After=graphical-session.target
-PartOf=graphical-session.target
 
 [Service]
 Type=simple
 ExecStart=${exec_start}
 Restart=on-failure
 RestartSec=3
+StartLimitIntervalSec=0
 Environment=QT_QPA_PLATFORM=wayland
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=default.target
 EOF
 
     info "Unit file written:  ${SERVICE_FILE}"
     info "ExecStart:          ${exec_start}"
-
-    section "Adding labwc autostart hook"
-    mkdir -p "$(dirname "${LABWC_AUTOSTART}")"
-    # Remove any existing entry then append fresh
-    if [[ -f "${LABWC_AUTOSTART}" ]]; then
-        sed -i "/${AUTOSTART_MARKER}/d" "${LABWC_AUTOSTART}"
-    fi
-    # labwc imports session env but does not activate graphical-session.target.
-    # This one line bridges that gap so WantedBy=graphical-session.target works.
-    echo "systemctl --user start graphical-session.target  ${AUTOSTART_MARKER}" \
-        >> "${LABWC_AUTOSTART}"
-    info "Added to ${LABWC_AUTOSTART}"
 
     section "Enabling linger"
     loginctl enable-linger "$(whoami)"
@@ -138,14 +125,12 @@ EOF
         systemctl --user restart "${SERVICE_NAME}"
         info "Service restarted (new args applied)"
     else
-        # Activate graphical-session.target now (labwc is already running)
-        systemctl --user start graphical-session.target 2>/dev/null || true
         systemctl --user start "${SERVICE_NAME}" || true
         info "Service started"
     fi
 
     echo
-    info "demos-automenu is enabled. The menu will autostart with the graphical session."
+    info "demos-automenu is enabled. The menu will autostart at boot."
 }
 
 # ── off ────────────────────────────────────────────────────────────────────────
@@ -156,14 +141,6 @@ cmd_off() {
         info "Service stopped and disabled"
     else
         warn "${SERVICE_NAME} was not active or not installed"
-    fi
-
-    section "Removing labwc autostart hook"
-    if [[ -f "${LABWC_AUTOSTART}" ]]; then
-        sed -i "/${AUTOSTART_MARKER}/d" "${LABWC_AUTOSTART}"
-        info "Entry removed from ${LABWC_AUTOSTART}"
-    else
-        warn "No labwc autostart file found"
     fi
 
     section "Disabling linger"
@@ -197,22 +174,10 @@ show_status() {
         echo "  ExecStart        : ${exec_line}"
     fi
 
-    if [[ -f "${LABWC_AUTOSTART}" ]] && grep -q "${AUTOSTART_MARKER}" "${LABWC_AUTOSTART}"; then
-        echo "  labwc autostart  : graphical-session.target hook present"
-    else
-        echo "  labwc autostart  : hook absent (service won't start at boot)"
-    fi
-
     local linger
     linger="$(loginctl show-user "$(whoami)" --property=Linger --value 2>/dev/null \
               || echo unknown)"
     echo "  linger           : ${linger}"
-
-    if systemctl --user is-active --quiet graphical-session.target 2>/dev/null; then
-        echo "  graphical-session: active"
-    else
-        echo "  graphical-session: inactive"
-    fi
 }
 
 # ── dispatch ───────────────────────────────────────────────────────────────────
