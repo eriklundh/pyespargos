@@ -99,8 +99,16 @@ step_nat_on() {
     # nftables rule file
     cat > "${NFT_FILE}" <<EOF
 # Managed by espargos-network.sh — do not edit by hand.
-# Masquerades outbound traffic from ESPARGOS (${ESPARGOS_NET}) via ${WIFI_IFACE}.
+# Applied by espargos-nat.service at boot.
 table ip espargos_nat {
+    chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;
+        # Intercept DNS queries ESPARGOS sends to 192.168.1.1:53 and
+        # forward them to a public resolver. ESPARGOS sees 192.168.1.1 as
+        # its DNS server; nothing actually listens on port 53 on this Pi.
+        iifname "${ETH_IFACE}" udp dport 53 dnat to 8.8.8.8
+        iifname "${ETH_IFACE}" tcp dport 53 dnat to 8.8.8.8
+    }
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
         ip saddr ${ESPARGOS_NET} oifname "${WIFI_IFACE}" masquerade
@@ -108,15 +116,17 @@ table ip espargos_nat {
 }
 EOF
 
-    # Dedicated systemd unit for boot persistence (avoids modifying /etc/nftables.conf)
+    # Dedicated systemd unit for boot persistence (avoids modifying /etc/nftables.conf).
+    # ExecStartPre deletes a stale table so restarting the service never duplicates rules.
     cat > "${NFT_SERVICE}" <<'UNIT'
 [Unit]
-Description=ESPARGOS NAT masquerade rules
+Description=ESPARGOS NAT masquerade + DNS redirect rules
 Documentation=file:///home/eriklundh/pyespargos/scripts/espargos-network.md
 After=network.target
 
 [Service]
 Type=oneshot
+ExecStartPre=-/usr/sbin/nft delete table ip espargos_nat
 ExecStart=/usr/sbin/nft -f /etc/nftables.d/espargos-nat.nft
 ExecStop=/usr/sbin/nft delete table ip espargos_nat
 RemainAfterExit=yes
@@ -125,24 +135,21 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 UNIT
 
-    # Apply rules immediately (delete first for idempotent reload)
-    /usr/sbin/nft delete table ip espargos_nat 2>/dev/null || true
-    /usr/sbin/nft -f "${NFT_FILE}"
-
     systemctl daemon-reload
-    systemctl enable espargos-nat
+    # enable --now: marks for boot AND starts immediately (ExecStartPre cleans up first)
+    systemctl enable --now espargos-nat
     info "NAT masquerade active: ${ESPARGOS_NET} → ${WIFI_IFACE} (masquerade)"
+    info "DNS redirect active:   ${ETH_IFACE}:53 → 8.8.8.8 (transparent to ESPARGOS)"
     info "espargos-nat.service enabled (auto-starts on reboot)"
 }
 
 step_nat_off() {
-    # Delete live rule immediately
+    # --now stops the service (triggers ExecStop: nft delete table) then disables it
+    systemctl disable --now espargos-nat 2>/dev/null || true
     /usr/sbin/nft delete table ip espargos_nat 2>/dev/null || true
-    # Disable and remove service (prevent boot re-application)
-    systemctl disable espargos-nat 2>/dev/null || true
     rm -f "${NFT_FILE}" "${NFT_SERVICE}"
     systemctl daemon-reload
-    info "NAT masquerade removed; espargos-nat.service disabled"
+    info "NAT masquerade and DNS redirect removed; espargos-nat.service disabled"
 }
 
 # ── Step 2 — nginx reverse proxy ──────────────────────────────────────────────
@@ -284,8 +291,14 @@ show_status() {
     else
         printf "  %-20s %s\n" "espargos-nat:" "not configured"
     fi
-    if /usr/sbin/nft list table ip espargos_nat &>/dev/null 2>&1; then
+    if sudo -n /usr/sbin/nft list table ip espargos_nat &>/dev/null 2>&1; then
         printf "  %-20s %s\n" "  nft table:" "present  ✓"
+        if sudo -n /usr/sbin/nft list chain ip espargos_nat postrouting &>/dev/null 2>&1; then
+            printf "  %-20s %s\n" "  NAT masquerade:" "active  ✓"
+        fi
+        if sudo -n /usr/sbin/nft list chain ip espargos_nat prerouting &>/dev/null 2>&1; then
+            printf "  %-20s %s\n" "  DNS redirect:" "eth0:53 → 8.8.8.8  ✓"
+        fi
     else
         printf "  %-20s %s\n" "  nft table:" "absent"
     fi
