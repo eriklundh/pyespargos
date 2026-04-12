@@ -11,6 +11,7 @@ import os
 import pathlib
 import shlex
 import subprocess
+import sys
 import pytest
 from unittest.mock import patch, MagicMock
 from PyQt6.QtCore import QUrl, QTimer
@@ -96,7 +97,7 @@ def test_card_launches_process_with_echo(qapp, tmp_path):
 
     assert len(launched) == 1, "Expected exactly one process launch"
     prog, args = launched[0]
-    assert prog == "python"
+    assert prog == sys.executable
     assert "192.168.1.2" in args
 
 

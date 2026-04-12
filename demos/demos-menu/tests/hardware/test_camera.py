@@ -208,6 +208,7 @@ def test_picamera2_camera_delivers_frame(qapp, qtbot):
         qtbot.waitSignal(sink.videoFrameChanged, timeout=5000, raising=True)
     finally:
         camera.stop()
+        camera.close()
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +320,7 @@ def test_picamera2_camera_setdevice_same_device_delivers_frames(qapp, qtbot):
         qtbot.waitSignal(sink.videoFrameChanged, timeout=5000, raising=True)
     finally:
         camera.stop()
+        camera.close()
 
 
 @pytest.mark.hardware
@@ -332,9 +334,9 @@ def test_picamera2_camera_setdevice_switches_pipeline_between_devices(qapp, qtbo
     except ImportError:
         pytest.skip("picamera2 not installed")
 
-    camera_info = Picamera2.global_camera_info()
+    camera_info = [info for info in Picamera2.global_camera_info() if "usb" not in info.get("Id", "").lower()]
     if len(camera_info) < 2:
-        pytest.skip("Fewer than 2 Picamera2 cameras connected — cannot test device switch")
+        pytest.skip("Fewer than 2 CSI Picamera2 cameras connected — cannot test device switch")
 
     _add_videocamera_path()
     try:
@@ -363,6 +365,7 @@ def test_picamera2_camera_setdevice_switches_pipeline_between_devices(qapp, qtbo
         qtbot.waitSignal(sink.videoFrameChanged, timeout=5000, raising=True)
     finally:
         camera.stop()
+        camera.close()
 
 
 # ---------------------------------------------------------------------------
@@ -411,20 +414,22 @@ def test_combined_camera_backend_changed_signal_fires_on_switch(qapp):
 
     cam = CombinedVideoCamera("qt", qt_devices[0])
     spy = QSignalSpy(cam.backendChanged)
+    try:
+        # Switch Qt → Pi (should fire backendChanged)
+        cam.setDevice(pi_devices[0])
+        assert len(spy) == 1, f"Expected 1 backendChanged after Qt→Pi switch, got {len(spy)}"
+        assert not cam.isQtBackend
+        assert cam.isPicamera2Backend
+        assert cam.activeQCamera is None
 
-    # Switch Qt → Pi (should fire backendChanged)
-    cam.setDevice(pi_devices[0])
-    assert len(spy) == 1, f"Expected 1 backendChanged after Qt→Pi switch, got {len(spy)}"
-    assert not cam.isQtBackend
-    assert cam.isPicamera2Backend
-    assert cam.activeQCamera is None
-
-    # Switch Pi → Qt (should fire backendChanged again)
-    cam.setDevice(qt_devices[0])
-    assert len(spy) == 2, f"Expected 2 backendChanged after Pi→Qt switch, got {len(spy)}"
-    assert cam.isQtBackend
-    assert not cam.isPicamera2Backend
-    assert cam.activeQCamera is not None
+        # Switch Pi → Qt (should fire backendChanged again)
+        cam.setDevice(qt_devices[0])
+        assert len(spy) == 2, f"Expected 2 backendChanged after Pi→Qt switch, got {len(spy)}"
+        assert cam.isQtBackend
+        assert not cam.isPicamera2Backend
+        assert cam.activeQCamera is not None
+    finally:
+        cam.close()
 
 
 @pytest.mark.hardware
@@ -469,6 +474,7 @@ def test_combined_camera_switches_from_qt_to_picamera2_delivers_frames(qapp, qtb
         qtbot.waitSignal(sink.videoFrameChanged, timeout=8000, raising=True)
     finally:
         cam.stop()
+        cam.close()
 
 
 @pytest.mark.hardware
@@ -515,3 +521,4 @@ def test_combined_camera_switches_from_picamera2_to_qt_delivers_frames(qapp, qtb
         qtbot.waitSignal(sink.videoFrameChanged, timeout=5000, raising=True)
     finally:
         cam.stop()
+        cam.close()
