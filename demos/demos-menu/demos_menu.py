@@ -6,6 +6,7 @@ CommonSettings: QObject, persists IP and array-mode settings.
 import json
 import logging
 import pathlib
+import sys
 import yaml
 
 from PyQt6.QtCore import QObject, pyqtProperty, pyqtSignal, pyqtSlot, QProcess
@@ -35,7 +36,12 @@ def build_command(command_template: str, ip: str, single_array: bool) -> list[st
         "ip": ip,
     })
     # Split and discard empty tokens (from collapsed {single_array} placeholders)
-    return [part for part in resolved.split() if part]
+    cmd = [part for part in resolved.split() if part]
+    # Replace bare "python"/"python3" with the running interpreter so demos use
+    # the same venv as the menu regardless of what is on PATH.
+    if cmd and cmd[0] in ("python", "python3"):
+        cmd[0] = sys.executable
+    return cmd
 
 
 class DemoScanner:
@@ -61,6 +67,8 @@ class DemoScanner:
             if not folder.is_dir():
                 continue
             if folder.name in _SCAN_EXCLUDES:
+                continue
+            if folder.name.startswith(".") or folder.name.startswith("_"):
                 continue
 
             yaml_path = folder / "demo-menuitem.yaml"
@@ -168,6 +176,7 @@ class ScannerAdapter(QObject):
         super().__init__(parent)
         self._scanner = scanner
         self._settings = settings
+        self._procs: list[QProcess] = []   # keep references so GC cannot kill child processes
         settings.singleArrayChanged.connect(self.demoItemsChanged)
 
     @pyqtProperty(list, notify=demoItemsChanged)
@@ -192,10 +201,24 @@ class ScannerAdapter(QObject):
         if not cmd:
             log.warning("launchDemo: empty command for '%s'", item["name"])
             return
-        proc = QProcess()
+        proc = QProcess(self)   # parent=self keeps it alive even if _procs is cleared
         proc.setWorkingDirectory(item["demo_dir"])
+
+        name = item["name"]
+        proc.readyReadStandardOutput.connect(
+            lambda: log.info("[%s] %s", name,
+                             proc.readAllStandardOutput().data().decode(errors="replace").rstrip()))
+        proc.readyReadStandardError.connect(
+            lambda: log.warning("[%s] %s", name,
+                                proc.readAllStandardError().data().decode(errors="replace").rstrip()))
+        proc.finished.connect(
+            lambda code, _status: log.info("'%s' exited (code=%d)", name, code))
+        proc.finished.connect(
+            lambda: self._procs.remove(proc) if proc in self._procs else None)
+
+        self._procs.append(proc)
         proc.start(cmd[0], cmd[1:])
-        log.info("Launched '%s': %s (cwd=%s)", item["name"], cmd, item["demo_dir"])
+        log.info("Launched '%s': %s (cwd=%s)", name, cmd, item["demo_dir"])
 
 
 def run(demos_root: pathlib.Path, settings_path: pathlib.Path = None,
