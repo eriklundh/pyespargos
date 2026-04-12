@@ -14,6 +14,7 @@ unreachable, so running the full suite without hardware still exits 0.
 import os
 import queue
 import subprocess
+import sys
 import threading
 import time
 
@@ -97,7 +98,7 @@ def spawn_demo():
 
         def test_foo(spawn_demo, espargos_ip):
             lines, found = spawn_demo(
-                cmd=["python", "speedtest.py", espargos_ip],
+                cmd=[sys.executable, "speedtest.py", espargos_ip],
                 demo_dir=DEMOS_ROOT / "speedtest",
                 pattern="calibration clusters",
                 timeout=30,
