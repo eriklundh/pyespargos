@@ -6,6 +6,7 @@ Run from the repo root or from demos/:
     python demos/menu.py 192.168.1.2
     python demos/menu.py -s 192.168.1.2
     python demos/menu.py --single-array 192.168.1.2
+    python demos/menu.py --fullscreen
 """
 import argparse
 import pathlib
@@ -30,6 +31,11 @@ def _make_parser() -> argparse.ArgumentParser:
         action="store_const", const=True, default=None,
         help="Enable single-array mode",
     )
+    p.add_argument(
+        "--fullscreen",
+        action="store_true", default=False,
+        help="Start menu in fullscreen mode",
+    )
     return p
 
 
@@ -37,4 +43,5 @@ if __name__ == "__main__":
     # parse_known_args: Qt may consume its own flags (--platform, --display …)
     args, _ = _make_parser().parse_known_args()
     demos_root = pathlib.Path(__file__).parent
-    sys.exit(run(demos_root, ip=args.ip, single_array=args.single_array))
+    sys.exit(run(demos_root, ip=args.ip, single_array=args.single_array,
+                 fullscreen=args.fullscreen))

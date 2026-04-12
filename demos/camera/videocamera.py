@@ -82,6 +82,8 @@ def list_all_cameras() -> list:
             idx += 1
     return cameras
 
+log = logging.getLogger(__name__)
+
 
 class VideoCamera(QCamera):
     "QCamera which exposes relevant properties for QML."
@@ -105,7 +107,8 @@ class VideoCamera(QCamera):
                 fmt = availableFormats[-1]
                 self.setCameraFormat(fmt)
             else:
-                logging.warning("VideoCamera: no formats available for device '%s'", videoDevice.description())
+                log.warning("VideoCamera: no formats available for device '%s'",
+                            videoDevice.description())
 
     def setDevice(self, device_str: str):
         device = self._find_device(device_str)
