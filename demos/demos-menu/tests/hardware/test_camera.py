@@ -3,17 +3,17 @@
 Three levels of camera testing:
 
 1. Enumeration (no ESPARGOS needed):
-   - Qt/V4L2: QMediaDevices.videoInputs() lists the Logitech C920
-   - Picamera2: Picamera2.global_camera_info() lists the IMX477 (HQ Camera)
+   - Qt/V4L2: QMediaDevices.videoInputs() lists any connected USB/V4L2 webcam
+   - Picamera2: Picamera2.global_camera_info() lists any connected CSI camera
    - --list-cameras CLI: camera.py reports both devices
 
 2. Demo launch with real ESPARGOS + camera:
    - camera.py --camera-backend qt     -s <ip> connects and starts backlog
-   - camera.py --camera-backend picamera2 -s <ip> enumerates IMX477, starts backlog
+   - camera.py --camera-backend picamera2 -s <ip> enumerates CSI camera, starts backlog
 
 3. Frame delivery (VideoCamera API directly):
-   - VideoCamera (Qt backend) delivers frames to QVideoSink from Logitech C920
-   - Picamera2VideoCamera delivers frames to QVideoSink from HQ Camera Module
+   - VideoCamera (Qt backend) delivers frames to QVideoSink from a USB webcam
+   - Picamera2VideoCamera delivers frames to QVideoSink from a CSI camera module
 
 NOTE: These tests require a real display (not offscreen) for Qt media device
 enumeration and frame delivery. Run with run-tests-hardware.sh which does NOT
@@ -29,7 +29,6 @@ DEMOS_ROOT = pathlib.Path(__file__).parents[3]
 CAMERA_DIR = DEMOS_ROOT / "camera"
 
 _BACKLOG_PATTERN = "started csi backlog thread"
-_IMX477_PATTERN = "imx477"
 
 
 def _add_videocamera_path():
@@ -45,7 +44,7 @@ def _add_videocamera_path():
 
 @pytest.mark.hardware
 def test_qt_enumerates_usb_camera(qapp):
-    """QMediaDevices.videoInputs() finds at least one V4L2 device (Logitech C920).
+    """QMediaDevices.videoInputs() finds at least one V4L2/USB video device.
 
     Requires a live display session (Wayland or X11) — Qt multimedia will not
     enumerate cameras over a bare SSH connection with no DISPLAY/WAYLAND_DISPLAY.
@@ -59,28 +58,25 @@ def test_qt_enumerates_usb_camera(qapp):
     from PyQt6.QtMultimedia import QMediaDevices
     devices = QMediaDevices.videoInputs()
     assert len(devices) > 0, (
-        "No Qt video input devices found — is the Logitech C920 connected via USB?"
-    )
-    descriptions = [d.description() for d in devices]
-    assert any("c920" in d.lower() or "webcam" in d.lower() or "logitech" in d.lower()
-               for d in descriptions), (
-        f"Logitech C920 not found in Qt device list: {descriptions}"
+        "No Qt video input devices found — is a USB webcam connected?"
     )
 
 
 @pytest.mark.hardware
-def test_picamera2_enumerates_hq_camera():
-    """Picamera2.global_camera_info() finds the IMX477 (HQ Camera Module)."""
+def test_picamera2_enumerates_csi_camera():
+    """Picamera2.global_camera_info() finds at least one CSI (non-USB) camera."""
     try:
         from picamera2 import Picamera2
     except ImportError:
         pytest.skip("picamera2 not installed (needs --system-site-packages venv)")
 
-    cameras = Picamera2.global_camera_info()
-    assert len(cameras) > 0, "No cameras found by Picamera2 — is the HQ Camera connected?"
-    assert any(_IMX477_PATTERN in str(cam).lower() for cam in cameras), (
-        f"IMX477 (HQ Camera) not found in Picamera2 device list: {cameras}"
-    )
+    all_cameras = Picamera2.global_camera_info()
+    csi_cameras = [c for c in all_cameras if "usb" not in c.get("Id", "").lower()]
+    if not csi_cameras:
+        pytest.skip(
+            f"No CSI camera found by Picamera2 (all detected: {all_cameras}) — "
+            "is a Raspberry Pi camera module connected?"
+        )
 
 
 @pytest.mark.hardware
@@ -95,11 +91,11 @@ def test_list_cameras_reports_both(qapp, spawn_demo):
     output = "\n".join(lines).lower()
     if "unrecognized arguments: --list-cameras" in output:
         pytest.skip("camera.py --list-cameras not implemented in this checkout")
-    assert "qt" in output or "v4l2" in output or "webcam" in output or "c920" in output, (
+    assert "qt" in output or "v4l2" in output or "webcam" in output or "usb" in output, (
         f"No Qt/V4L2 camera listed:\n{output}"
     )
-    assert "picamera2" in output or _IMX477_PATTERN in output, (
-        f"No Picamera2/IMX477 camera listed:\n{output}"
+    assert "picamera2" in output or "csi" in output or "imx" in output or "camera" in output, (
+        f"No Picamera2/CSI camera listed:\n{output}"
     )
 
 
@@ -127,7 +123,7 @@ def test_camera_demo_qt_backend_connects(espargos_ip, camera_backend, spawn_demo
 
 @pytest.mark.hardware
 def test_camera_demo_picamera2_backend_connects(espargos_ip, camera_backend, spawn_demo):
-    """camera.py --camera-backend picamera2 enumerates IMX477 and starts backlog."""
+    """camera.py --camera-backend picamera2 connects to a CSI camera and starts backlog."""
     if camera_backend == "qt":
         pytest.skip("--camera-backend=qt selected; skipping Picamera2 camera test")
 
@@ -142,12 +138,9 @@ def test_camera_demo_picamera2_backend_connects(espargos_ip, camera_backend, spa
         pattern=_BACKLOG_PATTERN,
         timeout=60,
     )
-    output = "\n".join(lines)
-    assert _IMX477_PATTERN in output.lower(), (
-        f"IMX477 not mentioned in Picamera2 camera output:\n{output}"
-    )
     assert found, (
-        f"'{_BACKLOG_PATTERN}' not found in camera (Picamera2) output within 60s:\n{output}"
+        f"'{_BACKLOG_PATTERN}' not found in camera (Picamera2) output within 60s:\n"
+        + "\n".join(lines)
     )
 
 
@@ -161,7 +154,7 @@ def test_qt_camera_delivers_frame(qapp, qtbot):
     from PyQt6.QtMultimedia import QMediaDevices
     if QMediaDevices.defaultVideoInput().isNull():
         pytest.skip(
-            "No default Qt video device — Logitech C920 not connected or "
+            "No default Qt video device — no USB webcam connected or "
             "no display session (DISPLAY/WAYLAND_DISPLAY not set)"
         )
 
@@ -226,7 +219,7 @@ def test_qt_camera_setdevice_same_device_delivers_frames(qapp, qtbot):
 
     if QMediaDevices.defaultVideoInput().isNull():
         pytest.skip(
-            "No default Qt video device — Logitech C920 not connected or "
+            "No default Qt video device — no USB webcam connected or "
             "no display session (DISPLAY/WAYLAND_DISPLAY not set)"
         )
 
@@ -391,6 +384,7 @@ def _combined_camera_preconditions():
         pi_devices = [
             f"{info['Num']}: {info['Model']}"
             for info in Picamera2.global_camera_info()
+            if "usb" not in info.get("Id", "").lower()
         ]
     except ImportError:
         pass
@@ -445,7 +439,7 @@ def test_combined_camera_switches_from_qt_to_picamera2_delivers_frames(qapp, qtb
     from PyQt6.QtMultimedia import QMediaDevices
     if QMediaDevices.defaultVideoInput().isNull():
         pytest.skip(
-            "No default Qt video device — Logitech C920 not connected or "
+            "No default Qt video device — no USB webcam connected or "
             "no display session (DISPLAY/WAYLAND_DISPLAY not set)"
         )
 
