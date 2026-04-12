@@ -32,7 +32,11 @@ def _pi_model_names() -> set[str]:
     if not PICAMERA2_AVAILABLE:
         return set()
     try:
-        return {info["Model"].lower() for info in Picamera2.global_camera_info() if info.get("Model")}
+        return {
+            info["Model"].lower()
+            for info in Picamera2.global_camera_info()
+            if info.get("Model") and "usb" not in info.get("Id", "").lower()
+        }
     except Exception:
         return set()
 
@@ -202,8 +206,8 @@ class Picamera2VideoCamera(QCamera):
         if not PICAMERA2_AVAILABLE:
             raise RuntimeError("picamera2 is not installed")
 
-        # Select device
-        camera_info = Picamera2.global_camera_info()
+        # Select device — only CSI (non-USB) cameras are used by this class.
+        camera_info = [info for info in Picamera2.global_camera_info() if "usb" not in info.get("Id", "").lower()]
         if not camera_info:
             raise RuntimeError("No Picamera2 cameras found")
 
@@ -232,7 +236,7 @@ class Picamera2VideoCamera(QCamera):
 
     def _apply_format(self, format_str: str | None):
         """Configure the Picamera2 instance for the given format string (or the last mode)."""
-        modes = self._picam.sensor_modes
+        modes = [m for m in self._picam.sensor_modes if "size" in m]
         if not modes:
             logging.warning("Picamera2: no sensor modes available")
             self._current_format_str = "unknown"
@@ -278,11 +282,22 @@ class Picamera2VideoCamera(QCamera):
         self._timer.stop()
         self._picam.stop()
 
+    def close(self):
+        """Release the Picamera2 hardware — call when the camera will not be restarted."""
+        self._timer.stop()
+        if self._picam is not None:
+            try:
+                self._picam.stop()
+            except Exception:
+                pass
+            self._picam.close()
+            self._picam = None
+
     def setFocusMode(self, mode):
         logging.warning("Picamera2VideoCamera: setFocusMode() is a no-op on CSI cameras")
 
     def setDevice(self, device_str: str):
-        camera_info = Picamera2.global_camera_info()
+        camera_info = [info for info in Picamera2.global_camera_info() if "usb" not in info.get("Id", "").lower()]
         selected = None
         for info in camera_info:
             candidate = f"{info['Num']}: {info['Model']}"
@@ -297,8 +312,8 @@ class Picamera2VideoCamera(QCamera):
             self.stop()
 
         old_picam = self._picam
-        self._picam = Picamera2(selected["Num"])
         old_picam.close()
+        self._picam = Picamera2(selected["Num"])
         self._current_device_str = f"{selected['Num']}: {selected['Model']}"
         self._apply_format(None)
 
@@ -433,6 +448,7 @@ class CombinedVideoCamera(PyQt6.QtCore.QObject):
             self._pi_device_strings = [
                 f"{info['Num']}: {info['Model']}"
                 for info in Picamera2.global_camera_info()
+                if "usb" not in info.get("Id", "").lower()
             ]
         self._all_device_strings = self._qt_device_strings + self._pi_device_strings
 
@@ -526,6 +542,13 @@ class CombinedVideoCamera(PyQt6.QtCore.QObject):
         if self._active is not None:
             self._active.stop()
         self._is_running = False
+
+    def close(self):
+        """Release all camera hardware — call when done with this object."""
+        self.stop()
+        if self._pi_cam is not None:
+            self._pi_cam.close()
+            self._pi_cam = None
 
     def setDevice(self, device_str: str):
         if device_str in self._qt_device_strings:
