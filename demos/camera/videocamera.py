@@ -1,5 +1,8 @@
+import logging
 import PyQt6.QtCore
 from PyQt6.QtMultimedia import QMediaDevices, QCameraDevice, QCameraFormat, QCamera
+
+log = logging.getLogger(__name__)
 
 
 class VideoCamera(QCamera):
@@ -20,8 +23,12 @@ class VideoCamera(QCamera):
             self.setCameraFormat(fmt)
         else:
             availableFormats = videoDevice.videoFormats()
-            fmt = availableFormats[-1]
-            self.setCameraFormat(fmt)
+            if availableFormats:
+                fmt = availableFormats[-1]
+                self.setCameraFormat(fmt)
+            else:
+                log.warning("VideoCamera: no formats available for device '%s'",
+                            videoDevice.description())
 
     def setDevice(self, device_str: str):
         device = self._find_device(device_str)
