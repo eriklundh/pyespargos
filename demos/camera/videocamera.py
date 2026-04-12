@@ -44,7 +44,7 @@ def _pi_model_names() -> set[str]:
 def _qt_device_is_pi_managed(device: QCameraDevice, pi_models: set[str]) -> bool:
     """Return True if this Qt/V4L2 device is the same physical camera as a Picamera2 device.
 
-    On Raspberry Pi, CSI cameras (e.g. imx477) appear both as non-functional
+    On Raspberry Pi, CSI cameras appear both as non-functional
     V4L2 capture nodes (enumerated by Qt) and as Picamera2 cameras.  Matching
     is done case-insensitively against the Qt device description.
     """
