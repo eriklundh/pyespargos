@@ -87,7 +87,7 @@ def test_picamera2_enumerates_hq_camera():
 def test_list_cameras_reports_both(qapp, spawn_demo):
     """camera.py --list-cameras reports at least one Qt and one Picamera2 device."""
     lines, _ = spawn_demo(
-        cmd=["python", "camera.py", "--list-cameras"],
+        cmd=[sys.executable, "camera.py", "--list-cameras"],
         demo_dir=CAMERA_DIR,
         pattern=None,
         timeout=10,
@@ -114,7 +114,7 @@ def test_camera_demo_qt_backend_connects(espargos_ip, camera_backend, spawn_demo
         pytest.skip("--camera-backend=picamera2 selected; skipping Qt camera test")
 
     lines, found = spawn_demo(
-        cmd=["python", "camera.py", "--camera-backend", "qt", "-s", espargos_ip],
+        cmd=[sys.executable, "camera.py", "--camera-backend", "qt", "-s", espargos_ip],
         demo_dir=CAMERA_DIR,
         pattern=_BACKLOG_PATTERN,
         timeout=45,
@@ -137,7 +137,7 @@ def test_camera_demo_picamera2_backend_connects(espargos_ip, camera_backend, spa
         pytest.skip("picamera2 not installed")
 
     lines, found = spawn_demo(
-        cmd=["python", "camera.py", "--camera-backend", "picamera2", "-s", espargos_ip],
+        cmd=[sys.executable, "camera.py", "--camera-backend", "picamera2", "-s", espargos_ip],
         demo_dir=CAMERA_DIR,
         pattern=_BACKLOG_PATTERN,
         timeout=60,
