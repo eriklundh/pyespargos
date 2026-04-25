@@ -1,0 +1,3 @@
+name: Stochastic Fading
+description: Visualize channel coefficient distribution and fit Rayleigh/Rice fading models.
+command: python stochastic-fading.py {single_array}
