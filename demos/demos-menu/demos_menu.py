@@ -6,6 +6,7 @@ CommonSettings: QObject, persists IP and array-mode settings.
 import json
 import logging
 import pathlib
+import subprocess
 import sys
 import yaml
 
@@ -222,6 +223,11 @@ class ScannerAdapter(QObject):
         self._procs.append(proc)
         proc.start(cmd[0], cmd[1:])
         log.info("Launched '%s': %s (cwd=%s)", name, cmd, item["demo_dir"])
+
+    @pyqtSlot()
+    def shutdownComputer(self):
+        QApplication.instance().quit()
+        subprocess.Popen(["systemctl", "poweroff"])
 
 
 def run(demos_root: pathlib.Path, settings_path: pathlib.Path = None,

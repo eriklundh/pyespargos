@@ -137,4 +137,65 @@ ApplicationWindow {
             }
         }
     }
+
+    // Kiosk mode: floating exit button in bottom-right corner
+    Button {
+        visible: backend_fullscreen
+        z: 10
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 10
+        text: "✕ Exit"
+        flat: true
+        font.pixelSize: 14
+        Material.background: "#227b3d"
+        Material.foreground: "#ffffffff"
+        onClicked: kioskExitDialog.open()
+    }
+
+    // Kiosk mode: exit confirmation dialog
+    Dialog {
+        id: kioskExitDialog
+        title: "Exit Application"
+        anchors.centerIn: parent
+        modal: true
+        standardButtons: Dialog.Cancel
+        z: 200
+
+        Material.roundedScale: Material.SmallScale
+
+        ColumnLayout {
+            spacing: 16
+            width: parent.width
+
+            Label {
+                text: "What would you like to do?"
+                font.pixelSize: 14
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+            }
+
+            Button {
+                text: "Quit Application"
+                Layout.fillWidth: true
+                Material.background: Material.accent
+                Material.foreground: "#ffffff"
+                onClicked: {
+                    kioskExitDialog.close()
+                    Qt.quit()
+                }
+            }
+
+            Button {
+                text: "Shut Down Computer"
+                Layout.fillWidth: true
+                Material.background: "#b71c1c"
+                Material.foreground: "#ffffff"
+                onClicked: {
+                    kioskExitDialog.close()
+                    scanner.shutdownComputer()
+                }
+            }
+        }
+    }
 }
