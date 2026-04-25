@@ -1,0 +1,3 @@
+name: Power Over Time
+description: Show received signal power over time, per antenna or combined.
+command: python power-over-time.py {single_array}
