@@ -1,22 +1,61 @@
 #!/usr/bin/env python
 
+import json
 import pathlib
 import sys
 
 sys.path.append(str(pathlib.Path(__file__).absolute().parents[2]))
 
 from demos.common import ESPARGOSApplication, BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin
+from demos.common.config_manager import deep_update
 
 import matplotlib.colors
 import numpy as np
 import espargos
 import argparse
 import time
+import logging
 
 import PyQt6.QtMultimedia
 import PyQt6.QtCore
 
 import videocamera
+
+# ---------------------------------------------------------------------------
+# Per-device camera preferences
+#
+# Persisted to ~/.config/espargos/camera-device-prefs.json, keyed by device
+# string (e.g. "/dev/video0" or "0: imx477").  These five settings vary
+# meaningfully between cameras and are therefore stored per-device:
+# ---------------------------------------------------------------------------
+
+_PREFS_PATH = pathlib.Path.home() / ".config" / "espargos" / "camera-device-prefs.json"
+
+# Nested config keys to persist per device
+_PER_CAMERA_CAMERA_KEYS = {"flip", "fov_azimuth", "fov_elevation"}
+_PER_CAMERA_VIZ_KEYS = {"azimuth_correction", "elevation_correction"}
+
+log = logging.getLogger(__name__)
+
+
+def _read_all_device_prefs() -> dict:
+    try:
+        return json.loads(_PREFS_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _write_all_device_prefs(all_prefs: dict):
+    try:
+        _PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _PREFS_PATH.write_text(json.dumps(all_prefs, indent=2))
+    except OSError as e:
+        log.warning("Could not save camera device prefs: %s", e)
+
+
+def _prefs_for_device(device_id: str) -> dict:
+    return _read_all_device_prefs().get(device_id or "", {})
+
 
 
 class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin, ESPARGOSApplication):
@@ -151,6 +190,11 @@ class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin,
                     }
                 }
             )
+
+            # Prefill per-device prefs directly into config so fetchAndApply()
+            # (called from QML Component.onCompleted during initialize_qml) picks
+            # them up as the initial UI state.
+            self._prefill_device_prefs(self.videocamera.getDevice())
         else:
             self.videocamera = videocamera.DummyVideoCamera()
 
@@ -568,6 +612,42 @@ class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin,
 
         return np.all(csi_completion_state) or timeout_condition
 
+    # ------------------------------------------------------------------
+    # Per-device camera preference helpers
+    # ------------------------------------------------------------------
+
+    def _current_device_id(self) -> str:
+        return self.videocamera.getDevice() if self.cameraEnabled else ""
+
+    def _prefill_device_prefs(self, device_id: str):
+        """Apply per-device prefs directly into ConfigManager state at startup.
+
+        Called before initialize_qml so that fetchAndApply() (triggered from
+        QML Component.onCompleted) reads the correct values from ui_config.
+        """
+        prefs = _prefs_for_device(device_id)
+        if not prefs:
+            return
+        deep_update(self.appconfig.app_config, prefs)
+        deep_update(self.appconfig.ui_config, prefs)
+
+    def _apply_device_prefs(self, device_id: str):
+        """Load and apply per-device prefs at runtime (event loop running)."""
+        prefs = _prefs_for_device(device_id)
+        if prefs:
+            self.appconfig.force(prefs)
+
+    def _save_device_prefs(self):
+        """Persist current per-camera settings for the active device."""
+        device_id = self._current_device_id()
+        prefs = _read_all_device_prefs()
+        device_prefs = {
+            "camera": {k: self.appconfig.get("camera", k) for k in _PER_CAMERA_CAMERA_KEYS},
+            "visualization": {k: self.appconfig.get("visualization", k) for k in _PER_CAMERA_VIZ_KEYS},
+        }
+        prefs[device_id] = device_prefs
+        _write_all_device_prefs(prefs)
+
     def onAboutToQuit(self):
         if self.cameraEnabled:
             self.videocamera.stop()
@@ -588,7 +668,9 @@ class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin,
         # Only update camera settings if changed
         if self.cameraEnabled and "device" in camera_cfg:
             try:
+                self._save_device_prefs()  # persist prefs for the outgoing device
                 self.videocamera.setDevice(camera_cfg.get("device"))
+                self._apply_device_prefs(camera_cfg.get("device"))  # load prefs for new device
             except Exception as e:
                 print(f"Error setting camera device: {e}")
 
@@ -615,6 +697,10 @@ class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin,
                 self.fovElevationChanged.emit()
             except Exception as e:
                 print(f"Error setting camera fov elevation: {e}")
+
+        # Persist per-camera settings whenever any of them change
+        if self.cameraEnabled and camera_cfg.keys() & _PER_CAMERA_CAMERA_KEYS:
+            self._save_device_prefs()
 
         if "receiver" in newcfg:
             receiver_cfg = newcfg.get("receiver", {}) if isinstance(newcfg.get("receiver", {}), dict) else {}
@@ -673,6 +759,10 @@ class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin,
                     self.elevationCorrectionChanged.emit()
                 except Exception as e:
                     print(f"Error setting elevation correction: {e}")
+
+            # Persist per-camera visualization settings whenever any of them change
+            if self.cameraEnabled and visualization_cfg.keys() & _PER_CAMERA_VIZ_KEYS:
+                self._save_device_prefs()
 
         # Let base class handle the rest
         super()._on_update_app_state(newcfg)
