@@ -52,6 +52,19 @@ def test_build_command_non_python_binary_unchanged():
     assert cmd[0] == "/usr/bin/node"
 
 
+def test_build_command_fullscreen_appends_kiosk_option():
+    cmd = build_command("python demo.py {single_array}", ip="192.168.1.2",
+                        single_array=False, fullscreen=True)
+    assert "-o" in cmd
+    assert "generic.kiosk_mode=True" in cmd
+
+
+def test_build_command_no_fullscreen_omits_kiosk_option():
+    cmd = build_command("python demo.py {single_array}", ip="192.168.1.2",
+                        single_array=False, fullscreen=False)
+    assert "generic.kiosk_mode=True" not in cmd
+
+
 # ---------------------------------------------------------------------------
 # ScannerAdapter.launchDemo — QProcess is mocked
 # ---------------------------------------------------------------------------
@@ -89,6 +102,22 @@ def test_launch_demo_passes_correct_command(qapp, tmp_path):
         MockQProcess.return_value = mock_proc
         adapter.launchDemo(0, "192.168.1.2", True)
         mock_proc.start.assert_called_once_with(expected_cmd[0], expected_cmd[1:])
+
+
+def test_launch_demo_fullscreen_appends_kiosk_option(qapp, tmp_path):
+    settings = CommonSettings(settings_path=tmp_path / "s.json")
+    adapter = ScannerAdapter(DemoScanner(DEMOS_ROOT), settings)
+    item = adapter.demoItems[0]
+    expected_cmd = build_command(item["command"], ip="192.168.1.2", single_array=True, fullscreen=True)
+
+    with patch("demos_menu.QProcess") as MockQProcess:
+        mock_proc = MagicMock()
+        MockQProcess.return_value = mock_proc
+        adapter.launchDemo(0, "192.168.1.2", True, fullscreen=True)
+        mock_proc.start.assert_called_once_with(expected_cmd[0], expected_cmd[1:])
+        # Confirm kiosk flag present
+        all_args = [expected_cmd[0]] + expected_cmd[1:]
+        assert "generic.kiosk_mode=True" in all_args
 
 
 def test_launch_demo_invalid_index_does_not_crash(qapp, tmp_path):

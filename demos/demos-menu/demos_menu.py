@@ -22,7 +22,8 @@ _DEFAULT_SETTINGS_PATH = pathlib.Path.home() / ".config" / "espargos-demos" / "s
 _SCAN_EXCLUDES = {"common"}
 
 
-def build_command(command_template: str, ip: str, single_array: bool) -> list[str]:
+def build_command(command_template: str, ip: str, single_array: bool,
+                  fullscreen: bool = False) -> list[str]:
     """Resolve placeholder tokens in a command template and split into a list.
 
     Tokens:
@@ -41,6 +42,8 @@ def build_command(command_template: str, ip: str, single_array: bool) -> list[st
     # the same venv as the menu regardless of what is on PATH.
     if cmd and cmd[0] in ("python", "python3"):
         cmd[0] = sys.executable
+    if fullscreen:
+        cmd += ["-o", "generic.kiosk_mode=True"]
     return cmd
 
 
@@ -190,14 +193,14 @@ class ScannerAdapter(QObject):
             result.append(d)
         return result
 
-    @pyqtSlot(int, str, bool)
-    def launchDemo(self, index: int, ip: str, single_array: bool):
+    @pyqtSlot(int, str, bool, bool)
+    def launchDemo(self, index: int, ip: str, single_array: bool, fullscreen: bool = False):
         items = self.demoItems
         if index < 0 or index >= len(items):
             log.warning("launchDemo: index %d out of range (have %d items)", index, len(items))
             return
         item = items[index]
-        cmd = build_command(item["command"], ip=ip, single_array=single_array)
+        cmd = build_command(item["command"], ip=ip, single_array=single_array, fullscreen=fullscreen)
         if not cmd:
             log.warning("launchDemo: empty command for '%s'", item["name"])
             return
