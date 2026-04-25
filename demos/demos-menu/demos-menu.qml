@@ -130,7 +130,7 @@ ApplicationWindow {
                         singleArray: settings.singleArray
 
                         onLaunchRequested: {
-                            scanner.launchDemo(index, settings.ip, settings.singleArray)
+                            scanner.launchDemo(index, settings.ip, settings.singleArray, backend_fullscreen)
                         }
                     }
                 }
