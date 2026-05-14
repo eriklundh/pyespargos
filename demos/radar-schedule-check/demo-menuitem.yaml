@@ -1,0 +1,3 @@
+name: Radar Schedule Check
+description: Verify radar TX schedule timing using received CSI timestamps.
+command: python radar-schedule-check.py {ip}

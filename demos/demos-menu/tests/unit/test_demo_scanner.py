@@ -106,10 +106,10 @@ def test_item_count(demos_root):
 
 
 def test_real_demos_root_finds_all_demos():
-    """Smoke test against the real demos/ tree — all 15 should be found."""
+    """Smoke test against the real demos/ tree — all 17 should be found."""
     real_root = pathlib.Path(__file__).parents[3]  # demos/demos-menu/tests/unit -> demos/
     scanner = DemoScanner(real_root)
-    assert len(scanner.items) == 15
+    assert len(scanner.items) == 17
 
 
 def test_real_demos_root_no_warnings(caplog):
