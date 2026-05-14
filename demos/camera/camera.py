@@ -620,23 +620,40 @@ class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin,
     def _current_device_id(self) -> str:
         return self.videocamera.getDevice() if self.cameraEnabled else ""
 
+    def _default_device_prefs(self) -> dict:
+        """Per-camera defaults pulled from DEFAULT_CONFIG.
+
+        Used as the fallback when switching to a device that has no saved
+        prefs, so it starts from the documented defaults instead of inheriting
+        the previous device's settings.
+        """
+        return {
+            "camera": {k: self.DEFAULT_CONFIG["camera"][k] for k in _PER_CAMERA_CAMERA_KEYS},
+            "visualization": {k: self.DEFAULT_CONFIG["visualization"][k] for k in _PER_CAMERA_VIZ_KEYS},
+        }
+
     def _prefill_device_prefs(self, device_id: str):
         """Apply per-device prefs directly into ConfigManager state at startup.
 
         Called before initialize_qml so that fetchAndApply() (triggered from
         QML Component.onCompleted) reads the correct values from ui_config.
+        Falls back to defaults if the device has no saved prefs.
         """
-        prefs = _prefs_for_device(device_id)
-        if not prefs:
-            return
+        prefs = _prefs_for_device(device_id) or self._default_device_prefs()
         deep_update(self.appconfig.app_config, prefs)
         deep_update(self.appconfig.ui_config, prefs)
 
     def _apply_device_prefs(self, device_id: str):
-        """Load and apply per-device prefs at runtime (event loop running)."""
-        prefs = _prefs_for_device(device_id)
-        if prefs:
-            self.appconfig.force(prefs)
+        """Load and apply per-device prefs at runtime (event loop running).
+
+        Always applies *something* — either the saved prefs for the device, or
+        the per-camera defaults from DEFAULT_CONFIG. Without this fallback,
+        switching to an un-tuned device would silently inherit the previous
+        device's settings (e.g. a 6 mm CS lens's wide-FOV correction left on
+        when switching to a different camera entirely).
+        """
+        prefs = _prefs_for_device(device_id) or self._default_device_prefs()
+        self.appconfig.force(prefs)
 
     def _save_device_prefs(self):
         """Persist current per-camera settings for the active device."""
