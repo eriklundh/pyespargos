@@ -16,13 +16,14 @@ from . import cluster
 from . import board
 from . import util
 from . import csi
+from . import radar
 
 
 class _CSICallback(object):
     def __init__(
         self,
         cb: Callable[[cluster.CSICluster], None],
-        cb_predicate: Callable[[np.ndarray, float], bool] = None,
+        cb_predicate: Callable[[cluster.CSICluster], bool] = None,
     ):
         # By default, provide csi if CSI is available from all antennas
         self.cb_predicate = cb_predicate
@@ -39,7 +40,7 @@ class _CSICallback(object):
         # Check if callback needs to be called: Use predicate function if defined, otherwise call if all antennas have CSI
         callback_required = False
         if self.cb_predicate is not None:
-            callback_required = self.cb_predicate(csi_cluster.get_completion(), csi_cluster.get_age())
+            callback_required = self.cb_predicate(csi_cluster)
         else:
             callback_required = csi_cluster.get_completion_all()
 
@@ -221,6 +222,37 @@ class Pool(object):
             b.set_gain_settings(settings)
         _ = self.get_gain_settings()
 
+    def get_radar_configs(self) -> list[dict]:
+        """
+        Return radar TX configuration for all boards in the pool.
+        """
+        return [b.get_radar_config() for b in self.boards]
+
+    def get_radar_config(self) -> dict:
+        """
+        Return radar TX configuration; sanity-check all boards report the same value.
+        """
+        configs = self.get_radar_configs()
+        self._assert_same_across_boards(configs, "Radar config")
+        return configs[0]
+
+    def set_radar_config(self, config: dict | radar.RadarPoolConfig):
+        """
+        Set radar TX configuration on the boards in this pool.
+
+        ``config`` may either be a single controller config dict applied to every board,
+        or a :class:`pyespargos.espargos.radar.RadarPoolConfig` containing one config per board.
+        """
+        if isinstance(config, radar.RadarPoolConfig):
+            if len(config.board_configs) != len(self.boards):
+                raise ValueError(f"RadarPoolConfig contains {len(config.board_configs)} board configs, expected {len(self.boards)}")
+            for board_obj, board_config in zip(self.boards, config.board_configs):
+                board_obj.set_radar_config(board_config)
+            return
+
+        for b in self.boards:
+            b.set_radar_config(config)
+
     def get_wificonf(self) -> dict:
         """
         Return WiFi config; sanity-check boards report the same value.
@@ -271,19 +303,24 @@ class Pool(object):
         for board in self.boards:
             board.stop()
 
+    def reboot(self):
+        """
+        Trigger a reboot on all boards in the pool.
+        """
+        for board in self.boards + self.refgen_boards:
+            board.reboot()
+
     def add_csi_callback(
         self,
         cb: Callable[[cluster.CSICluster], None],
-        cb_predicate: Callable[[np.ndarray, float], bool] = None,
+        cb_predicate: Callable[[cluster.CSICluster], bool] = None,
     ):
         """
         Register callback function that is invoked whenever a new CSI cluster is completed.
 
         :param cb: The function to call, gets instance of class :class:`.cluster.CSICluster` as parameter
-        :param cb_predicate: A function with signature :code:`(csi_completion_state, csi_age)` that defines the conditions under which
+        :param cb_predicate: A function with signature :code:`(csi_cluster)` that defines the conditions under which
             clustered CSI is regarded as completed and thus provided to the callback.
-            :code:`csi_completion_state` is a tensor of shape :code:`(boardcount, constants.ROWS_PER_BOARD, constants.ANTENNAS_PER_ROW)`,
-            and :code:`csi_age` is the age of the packet (relative to when any sensor first received it) in seconds
             If :code:`cb_predicate` returns true, clustered CSI is regarded as completed.
             If no predicate is provided, the default behavior is to trigger the callback when CSI has been received
             from all sensors on all boards. If :code:`calibrated` is true (default), callback is provided CSI that is already phase-calibrated.
@@ -302,8 +339,11 @@ class Pool(object):
 
         # Collection of complete clusters (= reference CSI data from all antennas available): L-LTF, HT20-LTF, and HT40-LTF
         complete_clusters_lltf = []
+        complete_cluster_timestamps_lltf = []
         complete_clusters_ht20 = []
+        complete_cluster_timestamps_ht20 = []
         complete_clusters_ht40 = []
+        complete_cluster_timestamps = []
 
         # Read wificonf to determine primary/secondary channel
         wificonf = self.get_wificonf()
@@ -326,10 +366,14 @@ class Pool(object):
                 any_csi_count = any_csi_count + 1
 
             if np.all(completion):
+                cluster_timestamps = cluster.get_sensor_timestamps()[board_num] if board_num is not None else cluster.get_sensor_timestamps()
+                complete_cluster_timestamps.append(cluster_timestamps)
                 if cluster.has_lltf():
                     complete_clusters_lltf.append(cluster.deserialize_csi_lltf()[board_num] if board_num is not None else cluster.deserialize_csi_lltf())
+                    complete_cluster_timestamps_lltf.append(cluster_timestamps)
                 if cluster.has_ht20ltf():
                     complete_clusters_ht20.append(cluster.deserialize_csi_ht20ltf()[board_num] if board_num is not None else cluster.deserialize_csi_ht20ltf())
+                    complete_cluster_timestamps_ht20.append(cluster_timestamps)
                 if cluster.has_ht40ltf():
                     complete_clusters_ht40.append(cluster.deserialize_csi_ht40ltf()[board_num] if board_num is not None else cluster.deserialize_csi_ht40ltf())
 
@@ -346,6 +390,7 @@ class Pool(object):
             if len(complete_clusters_lltf) == 0:
                 self.logger.warning("No LLTF calibration clusters received, deriving LLTF calibration from HT20 calibration")
             complete_clusters_lltf.extend([util.extract_lltf_subcarriers_from_ht20(csi_ht20) for csi_ht20 in complete_clusters_ht20])
+            complete_cluster_timestamps_lltf.extend(complete_cluster_timestamps_ht20)
 
         if any_csi_count < 5:
             raise Exception("ESPARGOS calibration failed, did not receive enough calibration clusters.")
@@ -354,9 +399,25 @@ class Pool(object):
             np.asarray(complete_clusters_lltf),
             np.asarray(complete_clusters_ht20),
             np.asarray(complete_clusters_ht40),
+            np.asarray(complete_cluster_timestamps),
+            np.asarray(complete_cluster_timestamps_lltf),
             channel_primary,
             channel_secondary,
         )
+
+    def _compute_sensor_clock_offsets(self, complete_cluster_timestamps: np.ndarray) -> np.ndarray:
+        """
+        Compute per-sensor clock offsets relative to sensor 0 from complete calibration clusters.
+
+        :param complete_cluster_timestamps: Array of shape ``(clusters, boards, rows, columns)`` containing per-sensor timestamps in seconds.
+        :return: Array of shape ``(boards, rows, columns)`` with offsets in seconds relative to sensor 0.
+        """
+        if len(complete_cluster_timestamps) == 0:
+            return np.full(self.get_shape(), np.nan, dtype=np.float64)
+
+        sensor_clock_offsets = np.asarray(complete_cluster_timestamps, dtype=np.float64)
+        sensor_clock_offsets -= sensor_clock_offsets[:, 0:1, 0:1, 0:1]
+        return np.mean(sensor_clock_offsets, axis=0)
 
     def calibrate(
         self,
@@ -407,6 +468,18 @@ class Pool(object):
         self.set_mac_filter(previous_mac_filter)
 
         # Collect calibration packets and compute calibration phases
+        (
+            complete_clusters_lltf,
+            complete_clusters_ht20,
+            complete_clusters_ht40,
+            complete_cluster_timestamps,
+            complete_cluster_timestamps_lltf,
+            channel_primary,
+            channel_secondary,
+        ) = self._clusters_to_calibration()
+        sensor_clock_offsets = self._compute_sensor_clock_offsets(complete_cluster_timestamps)
+        phase_calibration_he20 = util.derive_he20_calibration_from_ht20(complete_clusters_lltf, complete_cluster_timestamps_lltf, channel_secondary)
+
         if per_board:
             phase_calibrations_lltf = []
             phase_calibrations_ht20 = []
@@ -417,8 +490,10 @@ class Pool(object):
                     complete_clusters_lltf,
                     complete_clusters_ht20,
                     complete_clusters_ht40,
-                    channel_primary,
-                    channel_secondary,
+                    _complete_cluster_timestamps,
+                    _complete_cluster_timestamps_lltf,
+                    _channel_primary,
+                    _channel_secondary,
                 ) = self._clusters_to_calibration(board_num)
 
                 phase_calibrations_lltf.append(
@@ -453,17 +528,11 @@ class Pool(object):
                 np.asarray(phase_calibrations_lltf),
                 np.asarray(phase_calibrations_ht20),
                 np.asarray(phase_calibrations_ht40),
+                phase_calibration_he20,
+                sensor_clock_offsets=sensor_clock_offsets,
             )
 
         else:
-            (
-                complete_clusters_lltf,
-                complete_clusters_ht20,
-                complete_clusters_ht40,
-                channel_primary,
-                channel_secondary,
-            ) = self._clusters_to_calibration()
-
             phase_calibrations_lltf = util.csi_interp_eigenvec_per_subcarrier(np.asarray(complete_clusters_lltf)) if len(complete_clusters_lltf) > 0 else np.full(self.get_shape() + (csi.LEGACY_COEFFICIENTS_PER_CHANNEL,), np.nan)
             phase_calibrations_ht20 = util.csi_interp_eigenvec_per_subcarrier(np.asarray(complete_clusters_ht20)) if len(complete_clusters_ht20) > 0 else np.full(self.get_shape() + (csi.HT_COEFFICIENTS_PER_CHANNEL,), np.nan)
             phase_calibration_ht40 = (
@@ -489,6 +558,8 @@ class Pool(object):
                 phase_calibrations_lltf,
                 phase_calibrations_ht20,
                 phase_calibration_ht40,
+                phase_calibration_he20,
+                sensor_clock_offsets=sensor_clock_offsets,
                 board_cable_lengths=cable_lengths,
                 board_cable_vfs=cable_velocity_factors,
             )
@@ -530,13 +601,27 @@ class Pool(object):
         self.stats["packet_backlog"] = len(packets)
 
         for pkt in packets:
-            esp_num, serialized_csi, board_num = pkt[0], pkt[1], pkt[2]
+            esp_num, stream_packet, board_num = pkt[0], pkt[1], pkt[2]
 
-            source_mac_str = binascii.hexlify(bytearray(serialized_csi.source_mac)).decode("utf-8")
-            dest_mac_str = binascii.hexlify(bytearray(serialized_csi.dest_mac)).decode("utf-8")
+            source_mac_str = binascii.hexlify(bytearray(stream_packet.source_mac)).decode("utf-8")
+            dest_mac_str = binascii.hexlify(bytearray(stream_packet.dest_mac)).decode("utf-8")
 
             # Identifier (here: MAC address & sequence control number)
-            cluster_id = f"{source_mac_str}-{dest_mac_str}-{serialized_csi.seq_ctrl.seg:03x}-{serialized_csi.seq_ctrl.frag:01x}"
+            cluster_id = f"{source_mac_str}-{dest_mac_str}-{stream_packet.seq_ctrl.seg:03x}-{stream_packet.seq_ctrl.frag:01x}"
+
+            if isinstance(stream_packet, csi.radar_tx_report_tlv_t):
+                if cluster_id not in self.cluster_cache_ota:
+                    self.cluster_cache_ota[cluster_id] = cluster.CSICluster(
+                        source_mac_str,
+                        dest_mac_str,
+                        stream_packet.seq_ctrl,
+                        [b.revision for b in self.boards],
+                    )
+
+                self.cluster_cache_ota[cluster_id].set_radar_tx_report(stream_packet, board_num=board_num, esp_num=esp_num)
+                continue
+
+            serialized_csi = stream_packet
 
             # Prepare a cache entry for a new cluster with a different and add received data to the current cluster
             if serialized_csi.is_calib:
@@ -569,7 +654,7 @@ class Pool(object):
             for cb in self.callbacks:
                 all_callbacks_fired = all_callbacks_fired and cb.try_call(self.cluster_cache_ota[id])
 
-            if all_callbacks_fired:
+            if all_callbacks_fired and np.any(self.cluster_cache_ota[id].get_completion()):
                 stale.add(id)
 
         for id in self.cluster_cache_ota.keys():

@@ -18,6 +18,8 @@ class CSICalibration(object):
         calibration_values_lltf: np.ndarray,
         calibration_values_ht20: np.ndarray,
         calibration_values_ht40: np.ndarray,
+        calibration_values_he20: np.ndarray | None,
+        sensor_clock_offsets: np.ndarray,
         board_cable_lengths=None,
         board_cable_vfs=None,
     ):
@@ -34,6 +36,7 @@ class CSICalibration(object):
         :param calibration_values_lltf: The phase calibration values for the L-LTF channel, as a complex-valued numpy array of shape :code:`(boardcount, constants.ROWS_PER_BOARD, constants.ANTENNAS_PER_ROW, csi.LEGACY_COEFFICIENTS_PER_CHANNEL)`
         :param calibration_values_ht20: The phase calibration values for the HT20 channel, as a complex-valued numpy array of shape :code:`(boardcount, constants.ROWS_PER_BOARD, constants.ANTENNAS_PER_ROW, csi.HT_COEFFICIENTS_PER_CHANNEL)`
         :param calibration_values_ht40: The phase calibration values for the HT40 channel, as a complex-valued numpy array of shape :code:`(boardcount, constants.ROWS_PER_BOARD, constants.ANTENNAS_PER_ROW, csi.HT_COEFFICIENTS_PER_CHANNEL + csi.HT40_GAP_SUBCARRIERS + csi.HT_COEFFICIENTS_PER_CHANNEL)`
+        :param sensor_clock_offsets: Per-sensor clock offsets relative to sensor 0, in seconds, as a numpy array of shape :code:`(boardcount, constants.ROWS_PER_BOARD, constants.ANTENNAS_PER_ROW)`
         :param board_cable_lengths: The lengths of the cables that distribute the clock and phase calibration signal to the ESP32 boards, in meters
         :param board_cable_vfs: The velocity factors of the cables that distribute the clock and phase calibration signal to the ESP32 boards
         """
@@ -55,9 +58,22 @@ class CSICalibration(object):
             constants.ANTENNAS_PER_ROW,
             csi.HT_COEFFICIENTS_PER_CHANNEL + csi.HT40_GAP_SUBCARRIERS + csi.HT_COEFFICIENTS_PER_CHANNEL,
         )
+        if calibration_values_he20 is not None:
+            assert calibration_values_he20.shape == (
+                len(boards),
+                constants.ROWS_PER_BOARD,
+                constants.ANTENNAS_PER_ROW,
+                csi.HE20_COEFFICIENTS_PER_CHANNEL,
+            )
+        assert sensor_clock_offsets.shape == (
+            len(boards),
+            constants.ROWS_PER_BOARD,
+            constants.ANTENNAS_PER_ROW,
+        )
 
         self.logger = logging.getLogger("espargos.calib")
 
+        self.boards = boards
         self.channel_primary = channel_primary
         self.channel_secondary = channel_secondary
         # wavelengths_lltf = util.get_calib_trace_wavelength(self.frequencies_lltf).astype(calibration_values_lltf.dtype)
@@ -82,6 +98,7 @@ class CSICalibration(object):
         # From group delay (in seconds) to phase shift per subcarrier
         prop_phase_offsets_lltf = np.exp(-1.0j * 2 * np.pi * group_delays[:, :, :, np.newaxis] * util.get_frequencies_lltf(self.channel_primary)[np.newaxis, np.newaxis, np.newaxis, :])
         prop_phase_offsets_ht20 = np.exp(-1.0j * 2 * np.pi * group_delays[:, :, :, np.newaxis] * util.get_frequencies_ht20(self.channel_primary)[np.newaxis, np.newaxis, np.newaxis, :])
+        prop_phase_offsets_he20 = np.exp(-1.0j * 2 * np.pi * group_delays[:, :, :, np.newaxis] * util.get_frequencies_he20(self.channel_primary)[np.newaxis, np.newaxis, np.newaxis, :])
         prop_phase_offsets_ht40 = np.exp(-1.0j * 2 * np.pi * group_delays[:, :, :, np.newaxis] * util.get_frequencies_ht40(self.channel_primary, self.channel_secondary)[np.newaxis, np.newaxis, np.newaxis, :])
 
         # prop_calib_each_board_lltf = np.exp(-1.0j * 2 * np.pi * tracelengths[:,:,np.newaxis] / wavelengths_lltf[np.newaxis, np.newaxis])
@@ -92,6 +109,8 @@ class CSICalibration(object):
         self.calibration_values_lltf = np.einsum("bras,bras->bras", calibration_values_lltf, np.conj(prop_phase_offsets_lltf))
         self.calibration_values_ht20 = np.einsum("bras,bras->bras", calibration_values_ht20, np.conj(prop_phase_offsets_ht20))
         self.calibration_values_ht40 = np.einsum("bras,bras->bras", calibration_values_ht40, np.conj(prop_phase_offsets_ht40))
+        self.calibration_values_he20 = np.einsum("bras,bras->bras", calibration_values_he20, np.conj(prop_phase_offsets_he20))
+        self.sensor_clock_offsets = np.asarray(sensor_clock_offsets, dtype=np.float64)
 
         ## Account for additional board-specific phase offsets due to different feeder cable lengths in a multi-board antenna array system
         # if board_cable_lengths is not None:
@@ -151,6 +170,21 @@ class CSICalibration(object):
 
         return values * np.exp(-1.0j * np.angle(self.calibration_values_ht20))
 
+    def apply_he20(self, values: np.ndarray) -> np.ndarray:
+        """
+        Apply phase calibration to the provided HE20 CSI data by oversampling the
+        stored HT20 calibration.
+
+        :param values: The CSI data to which the phase calibration should be
+            applied, as a complex-valued numpy array of shape
+            :code:`(boardcount, constants.ROWS_PER_BOARD, constants.ANTENNAS_PER_ROW, csi.HE20_COEFFICIENTS_PER_CHANNEL)`
+        :return: The phase-calibrated CSI data
+        """
+        if np.isnan(self.calibration_values_he20).any():
+            self.logger.warning("HE20 calibration values contain NaN, missing calibration data?")
+
+        return values * np.exp(-1.0j * np.angle(self.calibration_values_he20))
+
     def apply_lltf(self, values: np.ndarray) -> np.ndarray:
         """
         Apply phase calibration to the provided L-LTF CSI data.
@@ -167,12 +201,14 @@ class CSICalibration(object):
 
         return values * np.exp(-1.0j * np.angle(self.calibration_values_lltf))
 
-    def apply_timestamps(self, timestamps: np.ndarray):
+    def time_to_sensor_time(self, time):
         """
-        Apply time offset calibration to the provided timestamps.
+        Convert a reference time into the corresponding local time for each sensor.
 
-        :param timestamps: The timestamps to which the calibration should be applied, as a numpy array of shape :code:`(boardcount, constants.ROWS_PER_BOARD, constants.ANTENNAS_PER_ROW)`
-        :return: The calibrated timestamps
+        The provided reference time is interpreted relative to sensor 0. The return value
+        therefore contains one time per sensor, offset by :attr:`sensor_clock_offsets`.
+
+        :param time: Reference time in seconds, relative to sensor 0. May be a scalar or an array broadcastable to the sensor layout.
+        :return: Per-sensor time values as a numpy array with shape :code:`(boardcount, constants.ROWS_PER_BOARD, constants.ANTENNAS_PER_ROW)`
         """
-        # TODO
-        return timestamps  # - self.timestamp_calibration_values
+        return np.asarray(time, dtype=np.float64) + self.sensor_clock_offsets

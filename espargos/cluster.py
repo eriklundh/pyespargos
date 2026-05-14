@@ -8,6 +8,11 @@ from . import revisions
 from . import constants
 from . import csi
 
+_RAW_LLTF_BYTES = csi.LEGACY_COEFFICIENTS_PER_CHANNEL * 2
+_RAW_HT20_BYTES = csi.HT_COEFFICIENTS_PER_CHANNEL * 2
+_RAW_HT40_BYTES = (csi.HT_COEFFICIENTS_PER_CHANNEL * 2) + (csi.HT40_GAP_SUBCARRIERS * 2) + (csi.HT_COEFFICIENTS_PER_CHANNEL * 2)
+_RAW_HE20_BYTES = csi.HE20_COEFFICIENTS_PER_CHANNEL * 2
+
 
 class CSICluster(object):
     """
@@ -44,6 +49,8 @@ class CSICluster(object):
         self.timestamp = time.time()
         self.board_revisions = board_revisions
         self.serialized_csi_all = [[[None for c in range(constants.ANTENNAS_PER_ROW)] for r in range(constants.ROWS_PER_BOARD)] for b in self.board_revisions]
+        self.radar_tx_report = None
+        self.radar_tx_index = -1
         self.shape = (
             len(self.board_revisions),
             constants.ROWS_PER_BOARD,
@@ -64,7 +71,7 @@ class CSICluster(object):
         self,
         board_num: int,
         esp_num: int,
-        serialized_csi: csi.serialized_csi_v3_t,
+        serialized_csi: csi.serialized_csi_tlv_t,
     ):
         """
         Add CSI data to the cluster.
@@ -78,6 +85,8 @@ class CSICluster(object):
         assert binascii.hexlify(bytearray(serialized_csi.dest_mac)).decode("utf-8") == self.dest_mac
         assert serialized_csi.seq_ctrl.seg == self.seq_ctrl.seg
         assert serialized_csi.seq_ctrl.frag == self.seq_ctrl.frag
+        if self.radar_tx_report is not None:
+            assert serialized_csi.is_radar
 
         # TODO: Assert that esp_num matches self-identified antenna ID
 
@@ -98,6 +107,45 @@ class CSICluster(object):
         self.rfswitch_state_all[board_num, row, col] = serialized_csi.rfswitch_state
         self.cfo_all[board_num, row, col] = csi.get_cfo_from_rx_ctrl(serialized_csi.rx_ctrl)
 
+    def set_radar_tx_report(self, radar_tx_report: csi.radar_tx_report_tlv_t, board_num: int | None = None, esp_num: int | None = None):
+        """
+        Attach radar transmit metadata for the Wi-Fi packet represented by this cluster.
+        """
+        assert binascii.hexlify(bytearray(radar_tx_report.source_mac)).decode("utf-8") == self.source_mac
+        assert binascii.hexlify(bytearray(radar_tx_report.dest_mac)).decode("utf-8") == self.dest_mac
+        assert radar_tx_report.seq_ctrl.seg == self.seq_ctrl.seg
+        assert radar_tx_report.seq_ctrl.frag == self.seq_ctrl.frag
+
+        serialized_csi = self._first_complete_sensor()
+        if serialized_csi is not None:
+            assert serialized_csi.is_radar
+
+        if self.radar_tx_report is not None:
+            assert bytes(self.radar_tx_report) == bytes(radar_tx_report)
+
+        self.radar_tx_report = radar_tx_report
+        if board_num is not None and esp_num is not None:
+            row, col = self.board_revisions[board_num].esp_num_to_row_col(esp_num)
+            self.radar_tx_index = board_num * constants.ROWS_PER_BOARD * constants.ANTENNAS_PER_ROW + row * constants.ANTENNAS_PER_ROW + col
+
+    def has_radar_tx_report(self) -> bool:
+        """
+        Check whether this cluster has transmit-side radar metadata attached.
+        """
+        return self.radar_tx_report is not None
+
+    def get_radar_tx_info(self):
+        """
+        Return the transmit-side radar report for this packet, or None if not available.
+        """
+        return self.radar_tx_report
+
+    def get_radar_tx_index(self) -> int:
+        """
+        Return the flattened TX sensor index derived from the CSI stream UID, or -1 if unknown.
+        """
+        return int(self.radar_tx_index)
+
     def deserialize_csi_lltf(self):
         """
         Deserialize the L-LTF part of the CSI data.
@@ -112,34 +160,26 @@ class CSICluster(object):
             nonlocal csi_lltf
             csi_lltf_sensor = csi_lltf[b, r, a, :].view()
 
-            # The ESP32 PHY v3 uses the weirdest format for L-LTF CSI.
-            # It is provided as 27 subcarriers, each as a 12-bit signed integer stored in a 16-bit container.
-            lltf_bytes = np.asarray(csi.csi_buf_v3_lltf_t(serialized_csi.buf).lltf, dtype=np.uint8)
+            if serialized_csi.is_compressed:
+                csi_lltf_sensor[:] = csi.decode_compressed_lltf(serialized_csi.buf, serialized_csi.acquire_force_lltf)
+                return
 
-            lo = lltf_bytes[0::2].astype(np.int16)
-            hi = lltf_bytes[1::2].astype(np.int16) & 0x0F
-            lltf_all = ((hi << 12) >> 4) | lo
-            final_re = lltf_all[-1].astype(np.float32)
-            lltf_all = lltf_all[:-1]  # Last two bytes of buffer are padding
-            lltf_all_cplx = lltf_all.astype(np.float32).view(np.complex64)
+            lltf_bytes = np.frombuffer(serialized_csi.buf[:_RAW_LLTF_BYTES], dtype=np.uint8)
 
-            # lltf_all_cplx only contains every second subcarrier, starting from the lowest frequency subcarrier
-            # array index = |   0 |   1 |   2 |   3 | ... |     |     |     |  26 |  27 |  28 |  29 | ... |  52 |  50 |   * |   A |
-            # subc. index = | -26 |   * | -24 |   * | ... |   * |  -2 |   * |  DC |  *  |   2 |   * | ... |   * |  24 |   * |   * |
-            # Numbers = existing subcarriers
-            #       * = missing subcarriers that need to be interpolated
-            #      DC = DC subcarrier, only exists in forced L-LTF mode, otherwise needs to be interpolated
-            #       A = only real part provided if acquire_force_lltf is false, not provided at all if acquire_force_lltf is true
-            # Note that the subcarrier with index 26 is *not* measured, so it needs to be *extrapolated*
-            csi_lltf_sensor[:-1:2] = lltf_all_cplx
-
-            # If acquire_force_lltf is false, the real part of the last subcarrier is provided.
-            # In that case, set real part of last subcarrier to the provided value, copy imaginary part from second last subcarrier.
-            # Otherwise, extrapolate last subcarrier.
-            if not serialized_csi.acquire_force_lltf:
-                csi_lltf_sensor[-1] = final_re + 1.0j * csi_lltf_sensor[-3].imag
-            else:
+            if serialized_csi.acquire_force_lltf:
+                # In forced LLTF mode the ESP32-C61 reports 52 signed 12-bit values:
+                # 26 complex coefficients for every second subcarrier, including DC.
+                # The last active subcarrier is not measured and must be extrapolated.
+                lltf_all = csi.unpack_lltf12_values(lltf_bytes, 52)
+                csi_lltf_sensor[:-1:2] = lltf_all.astype(np.float32).view(np.complex64)
                 csi_lltf_sensor[-1] = 2 * csi_lltf_sensor[-3] - csi_lltf_sensor[-5]
+            else:
+                # Native 11g LLTF carries 26 complex coefficients for even-indexed
+                # subcarriers plus a final real-only sample for the last subcarrier.
+                lltf_all = csi.unpack_lltf12_values(lltf_bytes, 53)
+                even_coeffs = lltf_all[:52].astype(np.float32).view(np.complex64)
+                csi_lltf_sensor[0:52:2] = even_coeffs
+                csi_lltf_sensor[-1] = lltf_all[52].astype(np.float32) + 1.0j * csi_lltf_sensor[-3].imag
 
             # DC subcarrier
             # Only provided if acquire_force_lltf is true, otherwise needs to be interpolated
@@ -154,7 +194,7 @@ class CSICluster(object):
 
         # Need to take timestamps into account to provide phase coherence across all sensors
         delay = self.get_sensor_timestamps()
-        subcarrier_range = np.arange(-csi_lltf.shape[-1] // 2, csi_lltf.shape[-1] // 2)[np.newaxis, np.newaxis, np.newaxis, :]
+        subcarrier_range = csi.get_csi_format_subcarrier_indices("lltf").astype(np.float64)[np.newaxis, np.newaxis, np.newaxis, :]
 
         # Need to adjust range if using 40MHz wide channel since LO is either above or below the primary channel that L-LTF is on
         subcarrier_range -= self.get_secondary_channel_relative() * int(2 * constants.WIFI_CHANNEL_SPACING / constants.WIFI_SUBCARRIER_SPACING)
@@ -176,21 +216,28 @@ class CSICluster(object):
             nonlocal csi_ht20
             csi_ht20_sensor = csi_ht20[b, r, a, :].view()
 
+            if serialized_csi.is_compressed:
+                csi_ht20_sensor[:] = csi.decode_compressed_ht20(serialized_csi.buf)
+                return
+
             # The ESP32 provides CSI as int8_t values in (im, re) pairs (in this order!)
             # To go from the (re, im) interpretation to (im, re), compute conjugate and multiply by 1.0j.
             # If channel bonding is used, provide CSI of primary channel
             if csi.wifi_pkt_rx_ctrl_v3_t(serialized_csi.rx_ctrl).he_siga1 & 0x80 != 0:
-                primary = csi.csi_buf_v3_ht40_t(serialized_csi.buf).htltf_higher if self.get_secondary_channel_relative() == -1 else csi.csi_buf_v3_ht40_t(serialized_csi.buf).htltf_lower
+                ht40_bytes = np.frombuffer(serialized_csi.buf[:_RAW_HT40_BYTES], dtype=np.int8)
+                htltf_lower = ht40_bytes[:_RAW_HT20_BYTES]
+                htltf_higher = ht40_bytes[_RAW_HT20_BYTES + (csi.HT40_GAP_SUBCARRIERS * 2) : _RAW_HT40_BYTES]
+                primary = htltf_higher if self.get_secondary_channel_relative() == -1 else htltf_lower
                 csi_ht20_sensor[:] = np.asarray(primary, dtype=np.int8).astype(np.float32).view(np.complex64)
             else:
-                csi_ht20_sensor[:] = np.asarray(csi.csi_buf_v3_ht20_t(serialized_csi.buf).htltf, dtype=np.int8).astype(np.float32).view(np.complex64)
+                csi_ht20_sensor[:] = np.frombuffer(serialized_csi.buf[:_RAW_HT20_BYTES], dtype=np.int8).astype(np.float32).view(np.complex64)
             csi_ht20_sensor[:] = -1.0j * np.conj(csi_ht20_sensor)
 
         self._foreach_complete_sensor(deserialize_ht20_packet)
 
         # Need to take timestamps into account to provide phase coherence across all sensors
         delay = self.get_sensor_timestamps()
-        subcarrier_range = np.arange(-csi_ht20.shape[-1] // 2, csi_ht20.shape[-1] // 2)[np.newaxis, np.newaxis, np.newaxis, :]
+        subcarrier_range = csi.get_csi_format_subcarrier_indices("ht20").astype(np.float64)[np.newaxis, np.newaxis, np.newaxis, :]
 
         # Need to adjust range if using 40MHz wide channel since LO is either above or below the primary channel that HT20 is on
         subcarrier_range -= self.get_secondary_channel_relative() * int(2 * constants.WIFI_CHANNEL_SPACING / constants.WIFI_SUBCARRIER_SPACING)
@@ -221,17 +268,15 @@ class CSICluster(object):
             csi_ht40_sensor_lower = csi_ht40[b, r, a, : csi.HT_COEFFICIENTS_PER_CHANNEL].view()
             csi_ht40_sensor_higher = csi_ht40[b, r, a, -csi.HT_COEFFICIENTS_PER_CHANNEL :].view()
 
+            if serialized_csi.is_compressed:
+                csi_ht40_sensor[:] = csi.decode_compressed_ht40(serialized_csi.buf)
+                return
+
             # The ESP32 provides CSI as int8_t values in (im, re) pairs (in this order!)
             # To go from the (re, im) interpretation to (im, re), compute conjugate and multiply by 1.0j.
-            csi_ht40_sensor_higher[:] = (
-                np.asarray(
-                    csi.csi_buf_v3_ht40_t(serialized_csi.buf).htltf_higher,
-                    dtype=np.int8,
-                )
-                .astype(np.float32)
-                .view(np.complex64)
-            )
-            csi_ht40_sensor_lower[:] = np.asarray(csi.csi_buf_v3_ht40_t(serialized_csi.buf).htltf_lower, dtype=np.int8).astype(np.float32).view(np.complex64)
+            ht40_bytes = np.frombuffer(serialized_csi.buf[:_RAW_HT40_BYTES], dtype=np.int8)
+            csi_ht40_sensor_higher[:] = ht40_bytes[_RAW_HT20_BYTES + (csi.HT40_GAP_SUBCARRIERS * 2) : _RAW_HT40_BYTES].astype(np.float32).view(np.complex64)
+            csi_ht40_sensor_lower[:] = ht40_bytes[:_RAW_HT20_BYTES].astype(np.float32).view(np.complex64)
             csi_ht40_sensor[:] = -1.0j * np.conj(csi_ht40_sensor)
 
         self._foreach_complete_sensor(deserialize_ht40_packet)
@@ -244,11 +289,44 @@ class CSICluster(object):
 
         # Need to take timestamps into account to provide phase coherence across all sensors
         delay = self.get_sensor_timestamps()
-        subcarrier_range = np.arange(-csi_ht40.shape[-1] // 2, csi_ht40.shape[-1] // 2)[np.newaxis, np.newaxis, np.newaxis, :]
+        subcarrier_range = csi.get_csi_format_subcarrier_indices("ht40").astype(np.float64)[np.newaxis, np.newaxis, np.newaxis, :]
         sto_delay_correction = np.exp(-1.0j * 2 * np.pi * delay[:, :, :, np.newaxis] * constants.WIFI_SUBCARRIER_SPACING * subcarrier_range)
         csi_ht40 = np.einsum("bras,bras->bras", csi_ht40, sto_delay_correction)
 
         return csi_ht40
+
+    def deserialize_csi_he20ltf(self):
+        """
+        Deserialize the HE20 HE-LTF part of the CSI data.
+
+        The internal HE20 ordering is ascending subcarrier index ``-122..122``.
+        The invalid / null tones ``-1, 0, 1`` are explicitly zeroed because
+        the raw PHY payload may contain meaningless values there.
+        """
+        assert self.has_he20ltf()
+        csi_he20 = np.zeros(self.shape + (csi.HE20_COEFFICIENTS_PER_CHANNEL,), dtype=np.complex64)
+
+        def deserialize_he20_packet(b, r, a, serialized_csi):
+            nonlocal csi_he20
+            csi_he20_sensor = csi_he20[b, r, a, :].view()
+
+            if serialized_csi.is_compressed:
+                csi_he20_sensor[:] = csi.decode_compressed_he20(serialized_csi.buf)
+                return
+
+            he20_raw = np.frombuffer(serialized_csi.buf[:_RAW_HE20_BYTES], dtype=np.int8).astype(np.float32).view(np.complex64)
+            csi_he20_sensor[:] = -1.0j * np.conj(he20_raw)
+
+        self._foreach_complete_sensor(deserialize_he20_packet)
+
+        delay = self.get_sensor_timestamps()
+        he20_fractional_delay = self._get_he20_fractional_timestamp_offsets()
+        subcarrier_range = csi.get_csi_format_subcarrier_indices("he20").astype(np.float64)[np.newaxis, np.newaxis, np.newaxis, :]
+        sto_delay_correction = np.exp(-1.0j * 2 * np.pi * (delay + he20_fractional_delay)[:, :, :, np.newaxis] * (constants.WIFI_SUBCARRIER_SPACING / 4.0) * subcarrier_range)
+        csi_he20 = np.einsum("bras,bras->bras", csi_he20, sto_delay_correction)
+        csi_he20 *= self._get_he20_cfo_phase_correction()[..., np.newaxis]
+        csi_he20[..., 121:124] = 0.0
+        return csi_he20
 
     def has_lltf(self) -> bool:
         """
@@ -260,6 +338,9 @@ class CSICluster(object):
 
         def check_lltf(b, r, a, serialized_csi):
             nonlocal have_lltf_all
+            if serialized_csi.csi_len == 0:
+                have_lltf_all = False
+                return
             # We only need to check this if acquire_force_lltf is false (otherwise, sensor always provides L-LTF)
             if not serialized_csi.acquire_force_lltf:
                 # If force lltf is false, sensor module is configured to only provide L-LTF if frame is 802.11g
@@ -280,6 +361,9 @@ class CSICluster(object):
 
         def check_ht20(b, r, a, serialized_csi):
             nonlocal have_ht20_all
+            if serialized_csi.csi_len == 0:
+                have_ht20_all = False
+                return
             # If force lltf is true, sensor only provides L-LTF, never HT20-LTF
             if serialized_csi.acquire_force_lltf:
                 have_ht20_all = False
@@ -301,6 +385,9 @@ class CSICluster(object):
 
         def check_ht40(b, r, a, serialized_csi):
             nonlocal have_ht40_all
+            if serialized_csi.csi_len == 0:
+                have_ht40_all = False
+                return
             # If force lltf is true, sensor only provides L-LTF, never HT40-LTF
             if serialized_csi.acquire_force_lltf:
                 have_ht40_all = False
@@ -316,6 +403,35 @@ class CSICluster(object):
         self._foreach_complete_sensor(check_ht40)
 
         return have_ht40_all
+
+    def has_he20ltf(self) -> bool:
+        """
+        Check if HE20 HE-LTF channel estimates are available for all complete sensors.
+        """
+        have_he20_all = True
+
+        def check_he20(b, r, a, serialized_csi):
+            nonlocal have_he20_all
+            if serialized_csi.csi_len == 0:
+                have_he20_all = False
+                return
+            if serialized_csi.acquire_force_lltf:
+                have_he20_all = False
+                return
+
+            rx_ctrl = csi.wifi_pkt_rx_ctrl_v3_t(serialized_csi.rx_ctrl)
+            if not self._is_he_format(rx_ctrl.cur_bb_format):
+                have_he20_all = False
+                return
+            if rx_ctrl.second != 0:
+                have_he20_all = False
+                return
+            if csi.wifi_pkt_rx_ctrl_v3_t(serialized_csi.rx_ctrl).rx_channel_estimate_len < _RAW_HE20_BYTES:
+                have_he20_all = False
+
+        self._foreach_complete_sensor(check_he20)
+
+        return have_he20_all
 
     def get_secondary_channel_relative(self):
         """
@@ -344,6 +460,14 @@ class CSICluster(object):
         :return: The primary channel number
         """
         return csi.wifi_pkt_rx_ctrl_v3_t(self._first_complete_sensor().rx_ctrl).channel
+
+    def is_11b(self) -> bool:
+        """
+        Check whether this packet uses the 802.11b baseband format.
+
+        :return: True if the packet is 802.11b, False otherwise
+        """
+        return csi.wifi_pkt_rx_ctrl_v3_t(self._first_complete_sensor().rx_ctrl).cur_bb_format == csi.wifi_rx_bb_format_t.RX_BB_FORMAT_11B
 
     def get_secondary_channel(self) -> int:
         """
@@ -430,6 +554,20 @@ class CSICluster(object):
         """
         return self.source_mac
 
+    def is_radar(self) -> bool:
+        """
+        Check whether this cluster corresponds to a radar packet.
+        """
+        serialized_csi = self._first_complete_sensor()
+        return False if serialized_csi is None else serialized_csi.is_radar
+
+    def is_calib(self) -> bool:
+        """
+        Check whether this cluster corresponds to a calibration packet.
+        """
+        serialized_csi = self._first_complete_sensor()
+        return False if serialized_csi is None else serialized_csi.is_calib
+
     def get_noise_floor(self):
         """
         Get the noise floor of the WiFi packet.
@@ -465,19 +603,36 @@ class CSICluster(object):
 
     def _nanosecond_timestamp(self, serialized_csi):
         rxstart_time_cyc = csi.wifi_pkt_rx_ctrl_v3_t(serialized_csi.rx_ctrl).rxstart_time_cyc
-        # rxstart_time_cyc_dec = csi.wifi_pkt_rx_ctrl_v3_t(serialized_csi.rx_ctrl).rxstart_time_cyc_dec
-        # rxstart_time_cyc_dec = 2048 - rxstart_time_cyc_dec if rxstart_time_cyc_dec >= 1024 else rxstart_time_cyc_dec
 
-        # Backwards compatibility: Only use global timestamp if it is nonzero
-        us_timestamp = serialized_csi.timestamp
-        if serialized_csi.global_timestamp_us != 0:
-            us_timestamp = serialized_csi.global_timestamp_us
-        hw_latched_timestamp_ns = us_timestamp * 1000
+        hw_latched_timestamp_ns = serialized_csi.global_timestamp_us * 1000
 
         # "official" formula by Espressif:
         # timestamp_ns = np.float128(serialized_csi.timestamp * 1000 + ((rxstart_time_cyc * 12500) // 1000) + ((rxstart_time_cyc_dec * 1562) // 1000) - 20800)
         # Formula that is probably more accurate:
         CYC_PERIOD_NS = 1 / 80e6 * 1e9
-        # CYC_DEC_PERIOD_NS = 1/640e6*1e9
         HW_TIMESTAMP_LAG_NS = 20800
-        return hw_latched_timestamp_ns - HW_TIMESTAMP_LAG_NS + rxstart_time_cyc * CYC_PERIOD_NS  # + rxstart_time_cyc_dec * CYC_DEC_PERIOD_NS
+        return hw_latched_timestamp_ns - HW_TIMESTAMP_LAG_NS + rxstart_time_cyc * CYC_PERIOD_NS
+
+    def _get_he20_fractional_timestamp_offsets(self):
+        fractional_offsets = np.full(self.shape, np.nan, dtype=np.float64)
+
+        def append_fractional_offset(b, r, a, serialized_csi):
+            rxstart_time_cyc_dec = csi.wifi_pkt_rx_ctrl_v3_t(serialized_csi.rx_ctrl).rxstart_time_cyc_dec
+            rxstart_time_cyc_dec = 2048 - rxstart_time_cyc_dec if rxstart_time_cyc_dec >= 1024 else rxstart_time_cyc_dec
+            fractional_offsets[b, r, a] = float(rxstart_time_cyc_dec) / 640e6
+
+        self._foreach_complete_sensor(append_fractional_offset)
+        return fractional_offsets
+
+    def _get_he20_cfo_phase_correction(self):
+        HE20_CFO_PHASE_DELAY_S = 16e-6
+        return np.exp(-1.0j * 2.0 * np.pi * self.get_cfo() * HE20_CFO_PHASE_DELAY_S).astype(np.complex64)
+
+    @staticmethod
+    def _is_he_format(bb_format: int) -> bool:
+        return bb_format in (
+            csi.wifi_rx_bb_format_t.RX_BB_FORMAT_HE_SU,
+            csi.wifi_rx_bb_format_t.RX_BB_FORMAT_HE_MU,
+            csi.wifi_rx_bb_format_t.RX_BB_FORMAT_HE_ERSU,
+            csi.wifi_rx_bb_format_t.RX_BB_FORMAT_HE_TB,
+        )

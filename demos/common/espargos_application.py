@@ -34,7 +34,11 @@ class ESPARGOSApplication(PyQt6.QtWidgets.QApplication):
     """
 
     BASE_DEFAULT_CONFIG = {
-        "backlog": {"size": 20, "fields": {"lltf": True, "ht20": False, "ht40": False}},
+        "backlog": {
+            "size": 20,
+            "fields": {"lltf": True, "ht20": False, "ht40": False, "he20": False},
+            "filters": {"exclude_11b": True},
+        },
         "pool": {
             # Pool configuration settings, partially handled by PoolDrawer
             "hosts": []
@@ -358,9 +362,19 @@ class BacklogMixin:
 
     def _finalize_pool_init(self, backlog_cb_predicate, calibrate):
         super()._finalize_pool_init(backlog_cb_predicate, calibrate)
-        # Do not enable any preamble formats for now, will be set later based on config
+        fields_cfg = self.get_initial_config("backlog", "fields", default=None)
+        initial_fields = None
+        if isinstance(fields_cfg, dict):
+            initial_fields = set(espargos.CSIBacklog.DATA_FORMATS.keys())
+            for field, enabled in fields_cfg.items():
+                if enabled:
+                    initial_fields.add(field)
+                else:
+                    initial_fields.discard(field)
+
         self.backlog = espargos.CSIBacklog(
             self.pool,
+            fields=initial_fields,
             cb_predicate=backlog_cb_predicate,
             calibrate=calibrate,
         )
@@ -443,7 +457,7 @@ class SingleCSIFormatMixin:
     Mixin that adds single preamble format selection to an ESPARGOSApplication.
 
     Provides:
-    - Mutually exclusive command-line arguments (--lltf, --ht20, --ht40)
+    - Mutually exclusive command-line arguments (--lltf, --ht20, --ht40, --he20)
     - Automatic backlog field configuration when combined with BacklogMixin
     """
 
@@ -455,11 +469,14 @@ class SingleCSIFormatMixin:
         Automatically interpolates gaps for HT20/HT40 formats.
 
         :param additional_keys: Additional backlog keys to retrieve alongside the CSI data.
-        :param allow_incomplete: If True, replace NaN values (from incomplete CSI clusters) with zeros
-            instead of rejecting the data. Useful when a CSI completion timeout is configured.
+        :param allow_incomplete: If True, keep only CSI datapoints that are fully finite and drop
+            datapoints containing NaN values (from incomplete CSI clusters), instead of rejecting
+            the whole backlog request. Additional returned backlog fields are filtered accordingly.
+            Useful when a CSI completion timeout is configured.
         :param remove_global_sto: If True, remove global STO from CSI data by re-centering the cluster on the mean STO.
             This should be true unless you want to do processing across multiple subsequent CSI datapoints where the global STO would be relevant.
-        :return: CSI array if no additional keys, tuple of (csi, *additional) if keys specified, or None if unavailable.
+        :return: CSI array if no additional keys, tuple of (csi, *additional) if keys specified, or
+                 None if unavailable or no complete datapoints remain.
         """
         if not hasattr(self, "backlog") or not self.backlog.nonempty():
             return None
@@ -483,12 +500,17 @@ class SingleCSIFormatMixin:
             espargos.util.interpolate_ht40ltf_gap(csi_backlog)
         elif csi_key == "ht20":
             espargos.util.interpolate_ht20ltf_gap(csi_backlog)
+        elif csi_key == "he20":
+            espargos.util.interpolate_he20ltf_gaps(csi_backlog)
 
         # Handle data containing NaN values (from incomplete CSI clusters)
         if np.any(np.isnan(csi_backlog)):
             if allow_incomplete:
-                csi_backlog = np.nan_to_num(csi_backlog, nan=0.0)
-                results[0] = csi_backlog
+                valid_datapoints = ~np.any(np.isnan(csi_backlog.reshape(csi_backlog.shape[0], -1)), axis=1)
+                if not np.any(valid_datapoints):
+                    return None
+                results = [result[valid_datapoints] for result in results]
+                csi_backlog = results[0]
             else:
                 return None
 
@@ -517,6 +539,12 @@ class SingleCSIFormatMixin:
             help="Use only CSI from HT20 (set up backlog and application accordingly)",
             action="store_true",
         )
+        format_group.add_argument(
+            "--he20",
+            default=False,
+            help="Use only CSI from HE20 (set up backlog and application accordingly)",
+            action="store_true",
+        )
 
     def _process_args(self):
         super()._process_args()
@@ -529,8 +557,10 @@ class SingleCSIFormatMixin:
             selected_formats.append("ht40")
         if self.args.ht20:
             selected_formats.append("ht20")
+        if self.args.he20:
+            selected_formats.append("he20")
         if len(selected_formats) > 1:
-            raise ValueError("At most one of --lltf, --ht40 or --ht20 can be selected!")
+            raise ValueError("At most one of --lltf, --ht40, --ht20 or --he20 can be selected!")
 
         # Remember choice in generic app config
         if len(selected_formats) == 1:
@@ -542,4 +572,5 @@ class SingleCSIFormatMixin:
                     "lltf": self.args.lltf,
                     "ht20": self.args.ht20,
                     "ht40": self.args.ht40,
+                    "he20": self.args.he20,
                 }

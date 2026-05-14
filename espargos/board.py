@@ -13,6 +13,7 @@ import time
 
 from . import revisions
 from . import csi
+from . import uart
 
 # Port used by the controller as source port for UDP CSI packets
 CSISTREAM_CONTROLLER_SRC_PORT = 53330
@@ -46,8 +47,7 @@ class EspargosAPIVersionError(Exception):
 CSISTREAM_MAGIC = bytes([0xE5, 0xA7, 0x60, 0x00])
 
 # Only this major API version is supported
-SUPPORTED_API_MAJOR_MIN = 0
-SUPPORTED_API_MAJOR_MAX = 2
+SUPPORTED_API_MAJOR = 3
 
 
 class Board(object):
@@ -58,6 +58,7 @@ class Board(object):
         "enable": True,
         "acquire_csi_legacy": True,
         "acquire_csi_force_lltf": False,
+        "compress_csi": False,
         "acquire_csi_ht20": True,
         "acquire_csi_ht40": True,
         "acquire_csi_vht": True,
@@ -89,6 +90,13 @@ class Board(object):
         self.logger = logging.getLogger("pyespargos.board")
 
         self.host = host
+        self._uart_client = None
+        self._transport_kind = "network"
+        if uart.is_uart_host(host):
+            self._transport_kind = "uart"
+            self._uart_client = uart.UARTClient(host)
+            self._uart_client.add_log_callback(self._handle_uart_log)
+            self._uart_client.connect()
         try:
             identification_raw = self._fetch("identify")
         except TimeoutError:
@@ -108,8 +116,7 @@ class Board(object):
             self.logger.error(f"Could not connect to {self.host} to fetch API information")
             raise TimeoutError
         except EspargosHTTPStatusError:
-            self.logger.warning(f"ESPARGOS at {self.host} runs older firmware with no API version information. " f"Please update the firmware.")
-            api_info = {"device": "espargos", "revision": "densiflorus", "api-major": 0, "api-minor": 0}
+            raise EspargosAPIVersionError(f"ESPARGOS controller at {self.host} did not provide API version information. " f"This version of pyespargos only supports API major version {SUPPORTED_API_MAJOR}. " "Please update the controller firmware.")
 
         if "api-major" not in api_info or "api-minor" not in api_info:
             raise EspargosUnexpectedResponseError(f"Server at {self.host} did not provide API version information in api_info response.")
@@ -117,11 +124,10 @@ class Board(object):
         api_major = api_info["api-major"]
         api_minor = api_info.get("api-minor", 0)
 
-        if api_major < SUPPORTED_API_MAJOR_MIN or api_major > SUPPORTED_API_MAJOR_MAX:
+        if api_major != SUPPORTED_API_MAJOR:
             raise EspargosAPIVersionError(
                 f"ESPARGOS controller at {self.host} runs API version {api_major}.{api_minor}, "
-                f"but this version of pyespargos only supports API major version between {SUPPORTED_API_MAJOR_MIN} and {SUPPORTED_API_MAJOR_MAX}. "
-                + ("Please update pyespargos." if api_major > SUPPORTED_API_MAJOR_MAX else "Please update the controller firmware.")
+                f"but this version of pyespargos only supports API major version {SUPPORTED_API_MAJOR}. " + ("Please update pyespargos." if api_major > SUPPORTED_API_MAJOR else "Please update the controller firmware.")
             )
 
         self.api_version = (api_major, api_minor)
@@ -145,8 +151,9 @@ class Board(object):
 
         self.logger.info(f"Identified ESPARGOS at {self.ip_info['ip']} as {self.get_name()}")
 
-        self.csistream_connected = True
+        self.csistream_connected = False
         self.consumers = []
+        self._fragment_reassembly = {}
 
     def get_name(self):
         """
@@ -162,20 +169,27 @@ class Board(object):
 
         Supported transports:
 
-        - "udp": The controller will send CSI packets to a local UDP socket. This transport is lower-latency and more efficient (higher throughput), but requires API version 1 or higher and may not work in all network environments.
+        - "udp": The controller will send CSI packets to a local UDP socket. This transport is lower-latency and more efficient (higher throughput), but may not work in all network environments.
         - "websocket": The controller will send CSI packets over a WebSocket connection. This transport is more widely compatible but may have higher latency and overhead.
+        - "uart": The controller will stream CSI data over the local serial/UART link. This transport is only available for hosts specified as ``uart:<port>``.
 
         :param transports: Optional list of transports to try, in order of preference. Valid values are "udp" and "websocket". If None (default), tries UDP first (if supported by API version) and then WebSocket.
 
         :raises EspargosCsiStreamConnectionError: If neither UDP nor WebSocket CSI stream could be established
         """
-        if transports is None:
-            transports = ["udp", "websocket"] if self.api_version[0] > 0 else ["websocket"]
+        if self._transport_kind == "uart":
+            transports = ["uart"] if transports is None else transports
+        elif transports is None:
+            transports = ["udp", "websocket"]
 
         for transport in transports:
-            if transport == "udp":
-                if self.api_version[0] == 0:
-                    raise EspargosAPIVersionError(f"ESPARGOS controller at {self.host} runs API version {self.api_version[0]}.{self.api_version[1]}, which does not support UDP CSI streaming. Please update the controller firmware.")
+            if transport == "uart":
+                uart_error = self._try_start_uart()
+                if uart_error is None:
+                    return
+
+                self.logger.warning(f"UART CSI stream failed for {self.get_name()}: {uart_error}")
+            elif transport == "udp":
                 udp_error = self._try_start_udp()
                 if udp_error is None:
                     return
@@ -191,6 +205,28 @@ class Board(object):
                 self.logger.error(f"Unknown transport {transport} specified for {self.get_name()}, skipping")
 
         raise EspargosCsiStreamConnectionError(f"Could not establish CSI stream to {self.host} via any of the enabled transports, tried transports: {transports}")
+
+    def _try_start_uart(self) -> str | None:
+        if self._uart_client is None:
+            return f"Host {self.host!r} is not a UART host"
+
+        self.logger.info(f"Trying UART CSI stream for {self.get_name()}")
+
+        def _callback(payload: bytes):
+            self._csistream_handle_message(payload)
+
+        self._uart_csi_callback = _callback
+        self._uart_client.add_csi_callback(self._uart_csi_callback)
+        try:
+            self._uart_client.enable_csi_stream()
+        except Exception as e:
+            self._uart_client.remove_csi_callback(self._uart_csi_callback)
+            return f"Could not enable UART CSI stream: {e}"
+
+        self._csistream_transport = "uart"
+        self.csistream_connected = True
+        self.logger.info(f"Started UART CSI stream for {self.get_name()} on {self.host}")
+        return None
 
     def _try_start_udp(self) -> str | None:
         """
@@ -319,7 +355,8 @@ class Board(object):
         """
         if self.csistream_connected:
             self.csistream_connected = False
-            self.csistream_thread.join()
+            if hasattr(self, "csistream_thread"):
+                self.csistream_thread.join()
 
             if getattr(self, "_csistream_transport", None) == "udp":
                 if hasattr(self, "_udp_keepalive_stop"):
@@ -328,8 +365,24 @@ class Board(object):
                 if hasattr(self, "_udp_sock"):
                     self._udp_sock.close()
                 self._disable_udp_stream()
+            elif getattr(self, "_csistream_transport", None) == "uart":
+                if hasattr(self, "_uart_csi_callback"):
+                    self._uart_client.remove_csi_callback(self._uart_csi_callback)
+                if self._uart_client is not None:
+                    self._uart_client.disable_csi_stream()
 
             self.logger.info(f"Stopped CSI stream for {self.get_name()}")
+
+    def close(self):
+        """
+        Close transport resources associated with this board.
+
+        For UART-backed boards, this releases the serial port lock. Calling this on
+        network-backed boards is harmless.
+        """
+        self.stop()
+        if self._uart_client is not None:
+            self._uart_client.close()
 
     def set_rfswitch(self, state: csi.rfswitch_state_t):
         """
@@ -471,6 +524,7 @@ class Board(object):
           - enable: Enable to acquire CSI.
           - acquire_csi_legacy: Enable to acquire L-LTF when receiving a 11g PPDU.
           - acquire_csi_force_lltf: Force receiver to acquire L-LTF, regardless of PPDU type.
+          - compress_csi: Transform CSI to a time-domain CIR before transport.
           - acquire_csi_ht20: Enable to acquire HT-LTF when receiving an HT20 PPDU.
           - acquire_csi_ht40: Enable to acquire HT-LTF when receiving an HT40 PPDU.
           - acquire_csi_vht: Present in the HTTP API; semantics depend on firmware build / PHY mode support.
@@ -493,6 +547,7 @@ class Board(object):
               "enable": true,
               "acquire_csi_legacy": true,
               "acquire_csi_force_lltf": false,
+              "compress_csi": false,
               "acquire_csi_ht20": true,
               "acquire_csi_ht40": true,
               "acquire_csi_vht": true,
@@ -553,6 +608,56 @@ class Board(object):
         """
         return self._get_json("get_gain_settings")
 
+    def set_radar_config(self, config: dict):
+        """
+        Sets the low-level radar TX configuration on the ESPARGOS controller.
+
+        The payload mirrors the controller's ``/set_tx_control`` API. Supported fields are:
+
+          - ``rfswitch_state`` (int)
+          - ``active_by_antid`` (list[bool], length 8)
+          - ``start_by_antid`` (list[int], length 8)
+          - ``period_by_antid`` (list[int], length 8)
+          - ``mac_by_antid`` (list[str], length 8, MAC addresses like ``"72:61:64:61:72:00"``)
+          - ``tx_power`` (int)
+          - ``tx_phymode`` (int)
+          - ``tx_rate`` (int)
+
+        Only provided fields are changed; others remain unchanged on the controller.
+
+        :param config: Radar TX configuration dict
+        :raises EspargosUnexpectedResponseError: If the server at the given host is not an ESPARGOS controller or the request was invalid
+        """
+        self._post_json_ok("set_tx_control", config)
+
+    def get_radar_config(self) -> dict:
+        """
+        Fetches the current low-level radar TX configuration from the ESPARGOS controller.
+
+        The returned dict mirrors the controller's ``/get_tx_control`` response and contains fields such as
+        ``rfswitch_state``, ``active_by_antid``, ``start_by_antid``, ``period_by_antid``, ``mac_by_antid``,
+        ``tx_power``, ``tx_phymode``, and ``tx_rate``.
+
+        :return: Radar TX configuration dict
+        :raises EspargosUnexpectedResponseError: If the server at the given host is not an ESPARGOS controller or the request was invalid
+        """
+        return self._get_json("get_tx_control")
+
+    def reboot(self):
+        """
+        Trigger a controller reboot.
+
+        The controller responds with ``"ok"`` and then reboots shortly after
+        sending the reply.
+
+        :raises EspargosUnexpectedResponseError: If the server at the given host
+            is not an ESPARGOS controller or the request was invalid
+        """
+        res = self._fetch("reboot")
+        if res != "ok":
+            self.logger.error(f"Invalid response: {res}")
+            raise EspargosUnexpectedResponseError(str(res))
+
     def add_consumer(self, clist: list, cv: threading.Condition, *args):
         """
         Adds a consumer to the CSI stream.
@@ -567,30 +672,66 @@ class Board(object):
         self.consumers.append((clist, cv, args))
 
     def _csistream_handle_message(self, message):
-        pktsize = ctypes.sizeof(self.revision.csistream_pkt_t)
-        assert len(message) % pktsize == 0
-        for i in range(0, len(message), pktsize):
-            packet = self.revision.csistream_pkt_t(message[i : i + pktsize])
-            serialized_csi = csi.deserialize_packet_buffer(self.revision, packet.buf)
+        try:
+            jumbo = csi.parse_csistream_jumbo_message(message)
+            fragments = list(csi.iter_csistream_fragments(jumbo))
+        except ValueError as exc:
+            self.logger.debug(f"Ignoring malformed CSI stream message: {exc}")
+            return
 
-            # Two sanity checks before we process the packet:
-            # 1) Check CRC32 of the CSI data (if provided by the firmware)
-            # 2) Check if antid matches the expected sensor ID (antid is provided by sensors, sensor ID provided by controller)
-            # CRC32 check (for major API version 1 or higher)
-            if self.api_version[0] >= 2:
-                crc_data = bytes(serialized_csi)[: ctypes.sizeof(serialized_csi) - ctypes.sizeof(ctypes.c_uint32)]
-                computed_crc = binascii.crc32(crc_data) & 0xFFFFFFFF
-                if computed_crc != serialized_csi.crc32:
-                    self.logger.warning(f"CRC32 mismatch for CSI packet from sensor {packet.esp_num} (expected 0x{serialized_csi.crc32:08x}, computed 0x{computed_crc:08x}), dropping packet")
-                    continue
+        now = time.monotonic()
+        stale_keys = [key for key, entry in self._fragment_reassembly.items() if now - entry["timestamp"] > 5.0]
+        for key in stale_keys:
+            self._fragment_reassembly.pop(key, None)
 
-            if self.revision.antid_to_esp_num[serialized_csi.antid] != packet.esp_num:
-                self.logger.warning(f"Received CSI packet with unexpected esp_num {packet.esp_num} (expected {self.revision.antid_to_esp_num[packet.esp_num]} for antid {serialized_csi.antid}), dropping packet")
+        completed_packets = []
+        for header, payload in fragments:
+            packet_antid = csi.csistream_uid_to_antid(int(header.uid))
+            key = int(header.uid)
+            entry = self._fragment_reassembly.get(key)
+            if entry is None or entry["total_fragments"] != int(header.total_fragments):
+                entry = {
+                    "timestamp": now,
+                    "antid": packet_antid,
+                    "total_fragments": int(header.total_fragments),
+                    "parts": {},
+                }
+                self._fragment_reassembly[key] = entry
+            elif entry["antid"] != packet_antid:
+                self.logger.warning(f"Received jumbo fragments with inconsistent UID-derived antid for uid {int(header.uid)}")
+                self._fragment_reassembly.pop(key, None)
                 continue
+
+            entry["timestamp"] = now
+            entry["parts"][int(header.fragment_index)] = bytes(payload)
+
+            if entry["total_fragments"] <= 0:
+                self._fragment_reassembly.pop(key, None)
+                continue
+
+            if len(entry["parts"]) != entry["total_fragments"]:
+                continue
+
+            if any(index not in entry["parts"] for index in range(entry["total_fragments"])):
+                continue
+
+            completed_packets.append((entry["antid"], b"".join(entry["parts"][index] for index in range(entry["total_fragments"]))))
+            self._fragment_reassembly.pop(key, None)
+
+        for packet_antid, packet_payload in completed_packets:
+            try:
+                serialized_csi = csi.deserialize_packet_buffer(self.revision, packet_payload)
+            except (AssertionError, ValueError):
+                self.logger.debug("Ignoring CSI payload with unexpected logical type header")
+                continue
+
+            serialized_csi.antid = packet_antid
+
+            packet_esp_num = self.revision.antid_to_esp_num[packet_antid]
 
             for clist, cv, args in self.consumers:
                 with cv:
-                    clist.append((packet.esp_num, serialized_csi, *args))
+                    clist.append((packet_esp_num, serialized_csi, *args))
                     cv.notify()
 
     def _udp_keepalive_loop(self):
@@ -656,6 +797,13 @@ class Board(object):
 
     def _fetch(self, path, data=None):
         method = "GET" if data is None else "POST"
+
+        if self._uart_client is not None:
+            response = self._uart_client.request(method, path, data, timeout=5)
+            if response.status != 200:
+                raise EspargosHTTPStatusError
+            return response.body_text()
+
         conn = http.client.HTTPConnection(self.host, timeout=5)
         conn.request(method, "/" + path, data)
 
@@ -689,3 +837,6 @@ class Board(object):
         except json.JSONDecodeError:
             self.logger.error(f"Invalid response: {res}")
             raise EspargosUnexpectedResponseError(str(res))
+
+    def _handle_uart_log(self, message: str):
+        self.logger.info(f"[device] {message.rstrip()}")
