@@ -148,8 +148,6 @@ Drawer {
 				visible: root.calibrationInProgress
 			}
 
-			// Calibration settings are still TODO
-			/*
 			Label { text: "Per Board"; color: "#ffffff"; horizontalAlignment: Text.AlignRight; Layout.alignment: Qt.AlignRight; Layout.fillWidth: true }
 			Switch {
 				id: perBoardCalibSwitch
@@ -160,7 +158,10 @@ Drawer {
 				Component.onCompleted: poolConfigManager.register(this)
 				onCheckedChanged: poolConfigManager.onControlChanged(this)
 				checked: false
+				ToolTip.visible: hovered
+				ToolTip.text: "For multi-board setups: Calibrate each ESPARGOS board independently. Enable this when boards do not share one common clock and phase reference signal."
 			}
+			/*
 			Label { text: "Show Raw"; color: "#ffffff"; horizontalAlignment: Text.AlignRight; Layout.alignment: Qt.AlignRight; Layout.fillWidth: true }
 			Switch {
 				id: showCalibSwitch
@@ -200,6 +201,22 @@ Drawer {
 				Component.onCompleted: poolConfigManager.register(this)
 				onCheckedChanged: poolConfigManager.onControlChanged(this)
 				checked: false
+				ToolTip.visible: hovered
+				ToolTip.text: "Always acquire the legacy L-LTF CSI (20 MHz bandwidth), regardless of packet format. Useful when you want a common CSI format across mixed traffic, but it will prevent access to format-specific training fields."
+			}
+
+			Label { text: "Compressed CSI"; color: "#ffffff"; horizontalAlignment: Text.AlignRight; Layout.alignment: Qt.AlignRight; Layout.fillWidth: true }
+			Switch {
+				id: compressCSISwitch
+				property string configKey: "compress_csi"
+				property string configProp: "checked"
+				property var encode: function(v) { return v ? 1 : 0 }
+				property var decode: function(v) { return !!v }
+				Component.onCompleted: poolConfigManager.register(this)
+				onCheckedChanged: poolConfigManager.onControlChanged(this)
+				checked: false
+				ToolTip.visible: hovered
+				ToolTip.text: "Compress CSI in firmware by converting it to a sparser time-domain representation before transport. This reduces bandwidth, but the received CSI is no longer the raw frequency-domain estimate."
 			}
 
 			// Section: Gain/AGC

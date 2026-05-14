@@ -19,6 +19,7 @@ class PoolDrawer(PyQt6.QtCore.QObject):
         "calibration": {"per_board": False, "show_csi": False, "duration": 1.0},
         "rf_switch": 2,
         "acquire_lltf_force": False,
+        "compress_csi": False,
         "gain": {
             "automatic": True,
             "rx_gain_value": 32,
@@ -32,6 +33,8 @@ class PoolDrawer(PyQt6.QtCore.QObject):
 
     # Init complete signal
     initComplete = PyQt6.QtCore.pyqtSignal()
+    calibrationStarted = PyQt6.QtCore.pyqtSignal()
+    calibrationFinished = PyQt6.QtCore.pyqtSignal(bool, str)
 
     def __init__(self, pool: espargos.pool.Pool, force_config=None, parent=None):
         # Note that the current pool config is authoritative, the default config is just for UI initialization
@@ -85,6 +88,8 @@ class PoolDrawer(PyQt6.QtCore.QObject):
         csi_cfg = self.pool.get_csi_acquire_config()
         if isinstance(csi_cfg, dict) and "acquire_csi_force_lltf" in csi_cfg:
             cfg_out["acquire_lltf_force"] = bool(csi_cfg["acquire_csi_force_lltf"])
+        if isinstance(csi_cfg, dict) and "compress_csi" in csi_cfg:
+            cfg_out["compress_csi"] = bool(csi_cfg["compress_csi"])
 
         # Gain settings -> UI fields
         gain = self.pool.get_gain_settings()
@@ -157,9 +162,12 @@ class PoolDrawer(PyQt6.QtCore.QObject):
                     self.pool.set_rfswitch(espargos.csi.rfswitch_state_t(int(delta["rf_switch"])))
 
                 # CSI acquire config
-                if "acquire_lltf_force" in delta:
+                if "acquire_lltf_force" in delta or "compress_csi" in delta:
                     cfg = dict()
-                    cfg["acquire_csi_force_lltf"] = bool(int(delta["acquire_lltf_force"]))
+                    if "acquire_lltf_force" in delta:
+                        cfg["acquire_csi_force_lltf"] = bool(int(delta["acquire_lltf_force"]))
+                    if "compress_csi" in delta:
+                        cfg["compress_csi"] = bool(int(delta["compress_csi"]))
                     self.pool.set_csi_acquire_config(cfg)
 
                 # Gains (unified: "automatic" controls both rx_gain and fft_scale)
@@ -220,10 +228,21 @@ class PoolDrawer(PyQt6.QtCore.QObject):
 
         self.calibration_running = True
         duration = self.cfgman.get("calibration", "duration")
+        per_board = bool(self.cfgman.get("calibration", "per_board"))
+        self.calibrationStarted.emit()
 
         def _calibrate_thread():
-            self.pool.calibrate(per_board=False, duration=duration, run_in_thread=False)
-            self.calibration_running = False
+            success = False
+            error_message = ""
+            try:
+                self.pool.calibrate(per_board=per_board, duration=duration, run_in_thread=False)
+                success = True
+            except Exception as e:
+                error_message = str(e)
+                self.cfgman.emitShowError("Calibration failed", error_message)
+            finally:
+                self.calibration_running = False
+                self.calibrationFinished.emit(success, error_message)
 
         # Perform calibration in separate thread to avoid blocking UI
         threading.Thread(target=_calibrate_thread, daemon=True).start()

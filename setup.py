@@ -16,7 +16,7 @@ setup(
         "Operating System :: OS Independent",
     ],
     python_requires=">=3.11",
-    install_requires=["websockets>=12.0", "numpy>=1.26.0"],
+    install_requires=["websockets>=12.0", "numpy>=1.26.0", "pyserial>=3.5", "aiohttp>=3.9.0"],
     extras_require={
         # Runtime dependencies for the demo applications
         "demos": [

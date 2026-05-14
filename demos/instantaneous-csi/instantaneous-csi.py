@@ -95,13 +95,7 @@ class EspargosDemoInstantaneousCSI(BacklogMixin, SingleCSIFormatMixin, ESPARGOSA
 
     @PyQt6.QtCore.pyqtProperty(int, constant=False, notify=preambleFormatChanged)
     def subcarrierCount(self):
-        preamble = self.genericconfig.get("preamble_format")
-        if preamble == "lltf":
-            return espargos.csi.LEGACY_COEFFICIENTS_PER_CHANNEL
-        elif preamble == "ht40":
-            return 2 * espargos.csi.HT_COEFFICIENTS_PER_CHANNEL + espargos.csi.HT40_GAP_SUBCARRIERS
-        else:
-            return espargos.csi.HT_COEFFICIENTS_PER_CHANNEL
+        return espargos.csi.get_csi_format_subcarrier_count(self.genericconfig.get("preamble_format"))
 
     def exec(self):
         return super().exec()
@@ -115,7 +109,7 @@ class EspargosDemoInstantaneousCSI(BacklogMixin, SingleCSIFormatMixin, ESPARGOSA
     # list parameters contain PyQt6.QtCharts.QLineSeries
     @PyQt6.QtCore.pyqtSlot(list, list, PyQt6.QtCharts.QValueAxis, PyQt6.QtCharts.QValueAxis)
     def updateCSI(self, powerSeries, phaseSeries, subcarrierAxis, axis):
-        if (result := self.get_backlog_csi("rssi", "rfswitch_state")) is None:
+        if (result := self.get_backlog_csi("rssi", "rfswitch_state", allow_incomplete=True)) is None:
             return
 
         csi_backlog, rssi_backlog, rfswitch_state = result
@@ -145,8 +139,10 @@ class EspargosDemoInstantaneousCSI(BacklogMixin, SingleCSIFormatMixin, ESPARGOSA
         if self.pooldrawer.cfgman.get("gain", "automatic"):
             csi_backlog = csi_backlog * 10 ** (rssi_backlog[..., np.newaxis] / 20)
 
-        # TODO: If using per-board calibration, interpolation should also be per-board
-        csi_interp = espargos.util.csi_interp_iterative(csi_backlog, iterations=5)
+        if self.pooldrawer.cfgman.get("calibration", "per_board"):
+            csi_interp = espargos.util.csi_interp_iterative_by_array(csi_backlog, iterations=5)
+        else:
+            csi_interp = espargos.util.csi_interp_iterative(csi_backlog, iterations=5)
         csi_flat = np.reshape(csi_interp, (-1, csi_interp.shape[-1]))
 
         display_mode = self.appconfig.get("display_mode")
@@ -188,7 +184,7 @@ class EspargosDemoInstantaneousCSI(BacklogMixin, SingleCSIFormatMixin, ESPARGOSA
                 )
                 / oversampling
             )
-            csi_power = (csi_flat_zeropadded.shape[1] * np.abs(csi_flat_zeropadded)) ** 2
+            csi_power = csi_flat_zeropadded.shape[1] * np.abs(csi_flat_zeropadded) ** 2
             self.stable_power_minimum = 0
             self.stable_power_maximum = self._interpolate_axis_range(self.stable_power_maximum, np.max(csi_power) * 1.1)
 
@@ -205,7 +201,7 @@ class EspargosDemoInstantaneousCSI(BacklogMixin, SingleCSIFormatMixin, ESPARGOSA
             # csi_phase = np.angle(csi_flat * np.exp(-1.0j * np.angle(csi_flat[0, :])))
 
             subcarrier_count = csi_flat.shape[1]
-            subcarrier_range = np.arange(-subcarrier_count // 2, subcarrier_count // 2)
+            subcarrier_range = espargos.csi.get_csi_format_subcarrier_indices(self.genericconfig.get("preamble_format"))
 
             for pwr_series, phase_series, ant_pwr, ant_phase in zip(powerSeries, phaseSeries, csi_power, csi_phase):
                 pwr_series.replace([PyQt6.QtCore.QPointF(s, p) for s, p in zip(subcarrier_range, ant_pwr)])

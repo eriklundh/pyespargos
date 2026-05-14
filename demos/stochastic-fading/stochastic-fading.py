@@ -114,12 +114,7 @@ class EspargosDemoStochasticFading(BacklogMixin, CombinedArrayMixin, SingleCSIFo
 
     @PyQt6.QtCore.pyqtProperty(int, constant=False, notify=preambleFormatChanged)
     def subcarrierCount(self):
-        preamble = self.genericconfig.get("preamble_format")
-        if preamble == "lltf":
-            return espargos.csi.LEGACY_COEFFICIENTS_PER_CHANNEL
-        if preamble == "ht40":
-            return 2 * espargos.csi.HT_COEFFICIENTS_PER_CHANNEL + espargos.csi.HT40_GAP_SUBCARRIERS
-        return espargos.csi.HT_COEFFICIENTS_PER_CHANNEL
+        return espargos.csi.get_csi_format_subcarrier_count(self.genericconfig.get("preamble_format"))
 
     @PyQt6.QtCore.pyqtProperty(int, constant=False, notify=binCountChanged)
     def binCount(self):
@@ -200,10 +195,11 @@ class EspargosDemoStochasticFading(BacklogMixin, CombinedArrayMixin, SingleCSIFo
         self.sampleCountChanged.emit()
         self.sampleProgressChanged.emit()
 
-    def _partial_cluster_predicate(self, completion, age):
+    def _partial_cluster_predicate(self, cluster):
+        completion = cluster.get_completion()
         timeout_condition = False
         if self.args.csi_completion_timeout > 0:
-            timeout_condition = np.sum(completion) >= 2 and age > self.args.csi_completion_timeout
+            timeout_condition = np.sum(completion) >= 2 and cluster.get_age() > self.args.csi_completion_timeout
         return bool(np.all(completion) or timeout_condition)
 
     def _get_partial_backlog_csi(self, *additional_keys: str, remove_global_sto=True):
@@ -227,6 +223,8 @@ class EspargosDemoStochasticFading(BacklogMixin, CombinedArrayMixin, SingleCSIFo
             espargos.util.interpolate_ht40ltf_gap(csi_backlog)
         elif csi_key == "ht20":
             espargos.util.interpolate_ht20ltf_gap(csi_backlog)
+        elif csi_key == "he20":
+            espargos.util.interpolate_he20ltf_gaps(csi_backlog)
 
         if additional_keys:
             return tuple(results)
