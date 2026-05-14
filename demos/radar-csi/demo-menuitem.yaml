@@ -1,0 +1,3 @@
+name: Radar CSI
+description: Show timestamp-corrected radar CSI between TX/RX sensor pairs.
+command: python radar-csi.py {single_array}

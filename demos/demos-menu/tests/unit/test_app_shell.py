@@ -8,23 +8,23 @@ from demos_menu import CommonSettings, DemoScanner, ScannerAdapter
 
 
 def test_scanner_adapter_exposes_items(qapp, tmp_path):
-    """ScannerAdapter.demoItems returns visible items — 13 with singleArray=True (default)."""
+    """ScannerAdapter.demoItems returns visible items — 15 with singleArray=True (default)."""
     demos_root = pathlib.Path(__file__).parents[3]
     settings = CommonSettings(settings_path=tmp_path / "s.json")
     adapter = ScannerAdapter(DemoScanner(demos_root), settings)
     items = adapter.demoItems
     # singleArray defaults to True: 2 combined_array_only demos are hidden
-    assert len(items) == 13
+    assert len(items) == 15
     assert all("name" in item for item in items)
 
 
 def test_scanner_adapter_exposes_all_items_in_multi_array_mode(qapp, tmp_path):
-    """All 15 demos visible when singleArray=False (multi-array mode)."""
+    """All 17 demos visible when singleArray=False (multi-array mode)."""
     demos_root = pathlib.Path(__file__).parents[3]
     settings = CommonSettings(settings_path=tmp_path / "s.json")
     settings.setSingleArray(False)
     adapter = ScannerAdapter(DemoScanner(demos_root), settings)
-    assert len(adapter.demoItems) == 15
+    assert len(adapter.demoItems) == 17
 
 
 def test_scanner_adapter_items_are_serialisable(qapp, tmp_path):
