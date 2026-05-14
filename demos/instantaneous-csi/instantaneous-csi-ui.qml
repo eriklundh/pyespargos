@@ -153,7 +153,9 @@ Common.ESPARGOSApplication {
 					titleText: (backend.timeDomain || backend.superResolution) ? "<font color=\"#e0e0e0\">Power [linear]</font>" : "<font color=\"#e0e0e0\">Power [dB]</font>"
 					titleFont.bold: false
 					gridLineColor: "#c0c0c0"
-					tickInterval: backend.timeDomain ? 100000 : (backend.superResolution ? 0.5 : 5)
+					tickInterval: (backend.timeDomain || backend.superResolution)
+						? Math.max(0.2, (max - min) / 6)
+						: 5
 					tickType: ValueAxis.TicksDynamic
 					labelsColor: "#e0e0e0"
 				}
@@ -220,6 +222,7 @@ Common.ESPARGOSApplication {
 	}
 
 	Timer {
+		id: updateTimer
 		interval: (backend.superResolution ? 1 / 30 : 1 / 60) * 1000
 		running: true
 		repeat: true

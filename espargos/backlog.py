@@ -6,12 +6,49 @@ import re
 from . import csi
 
 
+class BacklogFilter(object):
+    """
+    Base class for CSI backlog filters.
+
+    Subclasses implement :meth:`matches` to decide whether a clustered CSI frame
+    should be admitted to the backlog.
+    """
+
+    def matches(self, clustered_csi):
+        raise NotImplementedError("BacklogFilter subclasses must implement matches()")
+
+
+class MacFilter(BacklogFilter):
+    """
+    Backlog filter that matches source MAC addresses against a regular
+    expression.
+
+    :param filter_regex: Regular expression applied to the source MAC string
+    """
+
+    def __init__(self, filter_regex):
+        self.filter_regex = filter_regex
+        self._compiled_regex = re.compile(filter_regex)
+
+    def matches(self, clustered_csi):
+        return self._compiled_regex.match(clustered_csi.get_source_mac()) is not None
+
+
+class Exclude11bFilter(BacklogFilter):
+    """
+    Backlog filter that drops 802.11b packets, which do not carry CSI.
+    """
+
+    def matches(self, clustered_csi):
+        return not clustered_csi.is_11b()
+
+
 class CSIBacklog(object):
     """
     CSI backlog class. Stores CSI data in a ringbuffer for processing when needed.
 
     :param pool: CSI pool object to collect CSI data from
-    :param fields: List of fields to store (default: all), e.g., ["lltf", "ht40", "rssi", "cfo", "timestamp", "host_timestamp", "mac"]
+    :param fields: List of fields to store (default: all), e.g., ["lltf", "ht40", "rssi", "cfo", "timestamp", "host_timestamp", "mac", "radar_tx_timestamp", "radar_tx_index"]
     :param calibrate: Apply calibration to CSI data (default: True)
     :param cb_predicate: A function that defines the conditions under which clustered CSI is regarded as completed and thus added to the backlog.
         See :meth:`espargos.pool.Pool.add_csi_callback` for more details.
@@ -34,12 +71,19 @@ class CSIBacklog(object):
             "per_antenna": True,
             "dtype": np.complex64,
         },
+        "he20": {
+            "shape": (csi.HE20_COEFFICIENTS_PER_CHANNEL,),
+            "per_antenna": True,
+            "dtype": np.complex64,
+        },
         "rssi": {"shape": (), "per_antenna": True, "dtype": np.float32},
         "cfo": {"shape": (), "per_antenna": True, "dtype": np.float32},
         "rfswitch_state": {"shape": (), "per_antenna": True, "dtype": np.uint8},
         "timestamp": {"shape": (), "per_antenna": True, "dtype": np.float64},
         "host_timestamp": {"shape": (), "per_antenna": False, "dtype": np.float64},
         "mac": {"shape": (6,), "per_antenna": False, "dtype": np.uint8},
+        "radar_tx_timestamp": {"shape": (), "per_antenna": False, "dtype": np.float64},
+        "radar_tx_index": {"shape": (), "per_antenna": False, "dtype": np.int16},
     }
 
     def __init__(self, pool, fields=None, calibrate=True, cb_predicate=None, size=100):
@@ -53,7 +97,8 @@ class CSIBacklog(object):
         self.head = 0
         self.latest = None
         self.filllevel = 0
-        self.mac_filter = None
+        self.filter_mutex = threading.Lock()
+        self.filters = []
 
         self._initialize_storage(
             size=size,
@@ -100,8 +145,10 @@ class CSIBacklog(object):
                 else:
                     full_shape = (self.size,) + shape
 
-                if dtype in [np.uint8]:
+                if np.issubdtype(dtype, np.unsignedinteger):
                     self.storage[key] = np.zeros(full_shape, dtype=dtype)
+                elif np.issubdtype(dtype, np.signedinteger):
+                    self.storage[key] = np.full(full_shape, fill_value=-1, dtype=dtype)
                 else:
                     self.storage[key] = np.full(full_shape, fill_value=np.nan, dtype=dtype)
 
@@ -123,18 +170,16 @@ class CSIBacklog(object):
                     self.filllevel = min(self.filllevel + 1, self.size)
 
     def _on_new_csi(self, clustered_csi):
-        # Check MAC address if filter is installed
-        if self.mac_filter is not None:
-            if not self.mac_filter.match(clustered_csi.get_source_mac()):
+        with self.filter_mutex:
+            filters = tuple(self.filters)
+
+        for backlog_filter in filters:
+            if not backlog_filter.matches(clustered_csi):
                 return
 
         with self.storage_mutex:
             # Store timestamp
-            sensor_timestamps_raw = clustered_csi.get_sensor_timestamps()
-            sensor_timestamps = np.copy(sensor_timestamps_raw)
-            if self.calibrate:
-                assert self.pool.get_calibration() is not None
-                sensor_timestamps = self.pool.get_calibration().apply_timestamps(sensor_timestamps)
+            sensor_timestamps = clustered_csi.get_sensor_timestamps()
 
             if "timestamp" in self.fields:
                 self.storage["timestamp"][self.head] = sensor_timestamps
@@ -184,6 +229,20 @@ class CSIBacklog(object):
                     self.storage["ht20"][self.head] = np.nan
                     self.logger.warning(f"Received non-HT20 frame even though HT20 is enabled")
 
+            # Store HE20 CSI if applicable
+            if "he20" in self.fields:
+                if clustered_csi.has_he20ltf():
+                    csi_he20 = clustered_csi.deserialize_csi_he20ltf()
+
+                    if self.calibrate:
+                        assert self.pool.get_calibration() is not None
+                        csi_he20 = self.pool.get_calibration().apply_he20(csi_he20)
+
+                    self.storage["he20"][self.head] = csi_he20
+                else:
+                    self.storage["he20"][self.head] = np.nan
+                    self.logger.warning(f"Received non-HE20 frame even though HE20 is enabled")
+
             # Store RSSI
             if "rssi" in self.fields:
                 self.storage["rssi"][self.head] = clustered_csi.get_rssi()
@@ -202,6 +261,20 @@ class CSIBacklog(object):
             assert mac.shape == (6,)
             if "mac" in self.fields:
                 self.storage["mac"][self.head] = mac
+
+            # Store radar TX metadata if present. These are packet-wide fields:
+            # the TX timestamp is sensor-local, and tx_index is flattened over the pool layout.
+            if "radar_tx_timestamp" in self.fields:
+                self.storage["radar_tx_timestamp"][self.head] = np.nan
+            if "radar_tx_index" in self.fields:
+                self.storage["radar_tx_index"][self.head] = -1
+
+            if clustered_csi.has_radar_tx_report():
+                radar_tx_report = clustered_csi.get_radar_tx_info()
+                if "radar_tx_timestamp" in self.fields:
+                    self.storage["radar_tx_timestamp"][self.head] = radar_tx_report.get_hardware_tx_timestamp_ns() / 1e9
+                if "radar_tx_index" in self.fields:
+                    self.storage["radar_tx_index"][self.head] = clustered_csi.get_radar_tx_index()
 
             # Advance ringbuffer head
             self.latest = self.head
@@ -245,7 +318,7 @@ class CSIBacklog(object):
         :return: Tuple of data arrays corresponding to the keys (in same order), contents are oldest first
         """
         for key in keys:
-            if not key in self.fields:
+            if not (key in self.fields):
                 raise ValueError(f"Requested key '{key}' not in backlog fields")
 
         self.storage_mutex.acquire()
@@ -294,13 +367,44 @@ class CSIBacklog(object):
         self.running = False
         self.thread.join()
 
-    def set_mac_filter(self, filter_regex):
+    def add_filter(self, backlog_filter):
         """
-        Set a MAC address filter for the backlog
+        Add a filter to the backlog.
 
-        :param filter_regex: MAC address filter regex
+        :param backlog_filter: Instance of :class:`BacklogFilter`
         """
-        self.mac_filter = re.compile(filter_regex)
+        if not isinstance(backlog_filter, BacklogFilter):
+            raise TypeError("backlog_filter must be an instance of BacklogFilter")
+
+        with self.filter_mutex:
+            if backlog_filter not in self.filters:
+                self.filters.append(backlog_filter)
+
+    def remove_filter(self, backlog_filter):
+        """
+        Remove a previously added filter from the backlog.
+
+        :param backlog_filter: Instance of :class:`BacklogFilter`
+        """
+        with self.filter_mutex:
+            if backlog_filter in self.filters:
+                self.filters.remove(backlog_filter)
+
+    def clear_filters(self):
+        """
+        Remove all filters from the backlog.
+        """
+        with self.filter_mutex:
+            self.filters.clear()
+
+    def get_filters(self):
+        """
+        Get the list of currently active backlog filters.
+
+        :return: List of :class:`BacklogFilter` instances
+        """
+        with self.filter_mutex:
+            return list(self.filters)
 
     def get_size(self):
         """
