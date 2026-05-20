@@ -451,21 +451,25 @@ class Pool(object):
 
         # Enable calibration mode
         self.logger.info("Starting calibration")
-        previous_rfswitch_state = self.get_rfswitch()
         self.set_rfswitch(csi.rfswitch_state_t.SENSOR_RFSWITCH_REFERENCE)
 
-        # Run calibration for specified duration
-        start = time.time()
-        while (time.time() - start < duration) and (exithandler is None or exithandler.running):
-            if run_in_thread:
-                self.run()
-            else:
-                time.sleep(0.01)
-
-        # Disable calibration mode
-        self.logger.info("Finished calibration")
-        self.set_rfswitch(previous_rfswitch_state)
-        self.set_mac_filter(previous_mac_filter)
+        try:
+            # Run calibration for specified duration
+            start = time.time()
+            while (time.time() - start < duration) and (exithandler is None or exithandler.running):
+                if run_in_thread:
+                    self.run()
+                else:
+                    time.sleep(0.01)
+        finally:
+            # Always leave the array in normal receive mode, even if calibration
+            # was interrupted (KeyboardInterrupt / exception). Restoring a
+            # captured "previous" state is unsafe: an earlier interrupted run
+            # could itself have left the array in REFERENCE, and that broken
+            # state would then be propagated indefinitely.
+            self.logger.info("Finished calibration")
+            self.set_rfswitch(csi.rfswitch_state_t.SENSOR_RFSWITCH_ANTENNA_RANDOM)
+            self.set_mac_filter(previous_mac_filter)
 
         # Collect calibration packets and compute calibration phases
         (
