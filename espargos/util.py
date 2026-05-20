@@ -363,14 +363,14 @@ def _wrap_period_symmetric(values: np.ndarray, period: float) -> np.ndarray:
     return np.mod(values + period / 2.0, period) - period / 2.0
 
 
-def derive_he20_calibration_from_ht20(
+def derive_he20_calibration_from_lltf(
     complete_clusters_lltf: np.ndarray,
     complete_cluster_timestamps: np.ndarray,
     secondary_channel_relative: int,
 ) -> np.ndarray:
     """
     Derive a phase calibration for HE20 CSI from calibration packets that only
-    provide LLTF / HT20-resolution information.
+    provide LLTF.
 
     HE20 uses four times finer subcarrier spacing than LLTF / HT20. This means
     that a delay which is only observed on the coarse 312.5 kHz LLTF / HT20
@@ -415,12 +415,13 @@ def derive_he20_calibration_from_ht20(
     # estimate so that we combine all clusters and subcarriers coherently.
     csi_lltf_sto_corrected = np.asarray(complete_clusters_lltf, dtype=np.complex64)
 
-    # Undo STO calibration for this
-    subcarrier_range = np.arange(-complete_clusters_lltf.shape[-1] // 2, complete_clusters_lltf.shape[-1] // 2)[np.newaxis,np.newaxis, np.newaxis, np.newaxis, :]
+    # Undo the timestamp-based STO correction from deserialize_csi_lltf().
+    subcarrier_range = csi.get_csi_format_subcarrier_indices("lltf").astype(np.float64)[np.newaxis, np.newaxis, np.newaxis, np.newaxis, :]
     subcarrier_range -= secondary_channel_relative * int(2 * constants.WIFI_CHANNEL_SPACING / constants.WIFI_SUBCARRIER_SPACING)
     sto_delay_correction = np.exp(1.0j * 2 * np.pi * complete_cluster_timestamps[:, :, :, :, np.newaxis] * constants.WIFI_SUBCARRIER_SPACING * subcarrier_range)
 
     csi_lltf = np.einsum("cbras,cbras->cbras", csi_lltf_sto_corrected, sto_delay_correction)
+
     csi_lltf_flat = np.moveaxis(csi_lltf, -1, 1).reshape(csi_lltf.shape[0] * csi_lltf.shape[-1], -1)
     covariance = np.einsum("na,nb->ab", csi_lltf_flat, np.conj(csi_lltf_flat)) / max(csi_lltf_flat.shape[0], 1)
     eigvals, eigvecs = np.linalg.eig(covariance)
@@ -441,16 +442,11 @@ def derive_he20_calibration_from_ht20(
     mean_rx_baseband_sto = np.mean(rx_baseband_sto, axis=0)
     he20_subcarrier_indices = csi.get_csi_format_subcarrier_indices("he20").astype(np.float64)
     he20_frequencies_hz = he20_subcarrier_indices * (constants.WIFI_SUBCARRIER_SPACING / 4.0)
-    calibration_he20 = np.exp(
-        -1.0j
-        * 2.0
-        * np.pi
-        * mean_rx_baseband_sto[..., np.newaxis]
-        * he20_frequencies_hz[np.newaxis, np.newaxis, np.newaxis, :]
-    ).astype(np.complex64)
+    calibration_he20 = np.exp(-1.0j * 2.0 * np.pi * mean_rx_baseband_sto[..., np.newaxis] * he20_frequencies_hz[np.newaxis, np.newaxis, np.newaxis, :]).astype(np.complex64)
     calibration_he20 *= antenna_phase_offsets[..., np.newaxis].astype(np.complex64)
 
     return calibration_he20
+
 
 def interpolate_lltf_gap(csi_lltf: np.ndarray):
     """
@@ -489,6 +485,7 @@ def remove_mean_sto(csi_datapoints: np.ndarray):
     mean_sto_correction = np.exp(-1.0j * phase_slope.reshape(-1, 1) * subcarrier_range.reshape(1, -1))
 
     csi_datapoints *= mean_sto_correction.reshape(correction_shape)
+
 
 def shift_to_firstpeak_sync(
     csi_datapoints: np.ndarray,
