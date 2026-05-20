@@ -35,6 +35,12 @@ _PREFS_PATH = pathlib.Path.home() / ".config" / "espargos" / "camera-device-pref
 _PER_CAMERA_CAMERA_KEYS = {"flip", "fov_azimuth", "fov_elevation"}
 _PER_CAMERA_VIZ_KEYS = {"azimuth_correction", "elevation_correction"}
 
+# If no fresh CSI arrives within this many seconds, the transmitter is
+# considered gone and the overlay is cleared. Without this, the backlog keeps
+# the last datapoints and auto-exposure normalization renders them at full
+# brightness indefinitely — the overlay would freeze on the last position.
+_SIGNAL_TIMEOUT_S = 1.0
+
 log = logging.getLogger(__name__)
 
 
@@ -227,12 +233,42 @@ class EspargosDemoCamera(BacklogMixin, CombinedArrayMixin, SingleCSIFormatMixin,
 
         return super().exec()
 
+    def _clear_overlay(self):
+        """Emit an empty (transparent) overlay — used when no recent signal is present.
+
+        Produces the same RGBA structure as a normal frame with zero power
+        (green channel 0, alpha 255), so the shader blends in nothing.
+        """
+        resolution_azimuth = self.appconfig.get("beamformer", "resolution_azimuth")
+        resolution_elevation = self.appconfig.get("beamformer", "resolution_elevation")
+        empty = np.zeros(4 * resolution_azimuth * resolution_elevation, dtype=np.uint8)
+        empty[3::4] = 255  # alpha, matching a normal zero-power frame
+        self.beamspace_power_imagedata = empty
+        self.beamspacePowerImagedataChanged.emit(empty.tolist())
+
+        if self.appconfig.get("beamformer", "polarization_mode") == "show":
+            self.polarization_imagedata = empty
+            self.polarizationImagedataChanged.emit(empty.tolist())
+
+        if self.mean_rssi != -np.inf:
+            self.mean_rssi = -np.inf
+            self.rssiChanged.emit(self.mean_rssi)
+
     @PyQt6.QtCore.pyqtSlot()
     def updateSpatialSpectrum(self):
         result = self.get_backlog_csi("rssi", "host_timestamp", "mac", "rfswitch_state", allow_incomplete=True, return_format=True)
         if result is None:
             return
         csi_key, csi_backlog, rssi_backlog, timestamp_backlog, mac_backlog, rfswitch_state_backlog = result
+
+        # If no fresh CSI has arrived within the signal timeout, the transmitter
+        # is gone. Clear the overlay instead of leaving the last frame frozen —
+        # auto-exposure normalization would otherwise keep stale data at full
+        # brightness indefinitely.
+        fresh_timestamps = timestamp_backlog[np.isfinite(timestamp_backlog)]
+        if fresh_timestamps.size == 0 or (time.time() - np.max(fresh_timestamps)) > _SIGNAL_TIMEOUT_S:
+            self._clear_overlay()
+            return
 
         max_age = self.appconfig.get("beamformer", "max_age")
         if max_age > 0.0:
