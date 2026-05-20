@@ -21,7 +21,7 @@ class PoolDrawer(PyQt6.QtCore.QObject):
         "channel": 13,
         "secondary_channel": 2,
         "calibration": {"per_board": False, "show_csi": False, "duration": 1.0},
-        "rf_switch": 2,
+        "rf_switch": 4,  # ANTENNA_RANDOM — normal operation; matches startup init
         "acquire_lltf_force": False,
         "compress_csi": False,
         "gain": {
