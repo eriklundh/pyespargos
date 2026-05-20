@@ -5,6 +5,7 @@ import PyQt6.QtCore
 import PyQt6.QtQml
 
 import espargos.util
+import espargos.csi
 
 import numpy as np
 import subprocess
@@ -272,6 +273,16 @@ class ESPARGOSApplication(PyQt6.QtWidgets.QApplication):
         def config_applied():
             def _init_worker():
                 self.pool.start()
+
+                # Initialize the array to a known RF switch state. An unclean
+                # exit of a previous run (e.g. Ctrl-C during calibration) can
+                # leave the RF switch stuck in REFERENCE or ANTENNA_L mode;
+                # pool.calibrate() would then read that broken state as the
+                # "previous" state and restore it afterwards, propagating the
+                # fault. Forcing ANTENNA_RANDOM here makes every run start
+                # from a clean, known state.
+                self.pool.set_rfswitch(espargos.csi.rfswitch_state_t.SENSOR_RFSWITCH_ANTENNA_RANDOM)
+
                 if calibrate:
                     self.pool.calibrate(duration=2, per_board=False, **additional_calibrate_args)
 
